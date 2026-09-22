@@ -2,6 +2,7 @@
 config.yaml
 .env
 *.env
+pic/                 # exchange screenshots: real positions, sizes and margins
 
 # Runtime state
 state.db
