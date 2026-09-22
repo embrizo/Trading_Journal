@@ -49,6 +49,21 @@ def test_r_multiple_arithmetic():
     assert A.planned_rr("LONG", 100, 90, 125) == pytest.approx(2.5)
 
 
+def test_no_r_when_the_stop_sits_beyond_entry():
+    """A stop trailed past entry has negative risk; R would come out inverted —
+    a winner as a big negative number, derived as a LOSS. R is measured against
+    INITIAL risk, so such a stop yields no R at all."""
+    # LONG with the stop above entry, SHORT with it below
+    assert A.r_multiple("LONG", 1.2673, 1.27, 1.35) is None
+    assert A.r_multiple("SHORT", 1.0276, 1.027, 0.95) is None
+    # the same exits against the stops the trades were opened with
+    assert A.r_multiple("LONG", 1.2673, 1.133, 1.35) == pytest.approx(0.6158, abs=1e-4)
+    assert A.r_multiple("SHORT", 1.0276, 1.082, 0.95) == pytest.approx(1.4265, abs=1e-4)
+    # planned_rr shares the guard
+    assert A.planned_rr("LONG", 100, 105, 130) is None
+    assert A.pnl_amount("LONG", 1.2673, 1.35, None, 17.3, None, None) is None   # no R, no fallback
+
+
 def test_pnl_prefers_size_then_risk_amount():
     assert A.pnl_amount("LONG", 100, 110, 2, None, None, 1) == pytest.approx(19)
     assert A.pnl_amount("SHORT", 100, 110, 2, None, None, 0) == pytest.approx(-20)

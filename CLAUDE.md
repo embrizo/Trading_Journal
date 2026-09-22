@@ -69,6 +69,12 @@ unless the user states win/loss/BE — it is derived from R.
   pytest only for core + journal).
 - `journal/analytics.py` is the only place metrics are computed. Do not add
   arithmetic on prices/R anywhere else (db, tools, cli, prompts).
+- `sl_price` holds the **initial** stop — R is measured against initial risk.
+  Log stop changes as `sl_moved` events; never overwrite `sl_price` with a
+  trailing stop (past entry it makes risk negative, and `r_multiple` then
+  returns `None` rather than an inverted number).
+- Every write path in `tools.py` re-runs `rules.check` + `record_violations`.
+  A new one must too, or facts stated after the fact never reach the rules.
 - `journal` imports `core`; `core` never imports `journal`.
 - Keep the Pine script and the Python core in parity (see `Claude_HANDOFF.md`
   "Key implementation notes").

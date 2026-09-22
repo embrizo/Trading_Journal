@@ -111,6 +111,11 @@ Quote the whole line (PowerShell eats bare `--` and splits on commas otherwise).
 Give `sl_moved` both `from=` and `to=`: the *"Never widen the stop"* rule compares them
 against your direction, so trailing a stop toward entry is not flagged — only moving it
 away is. Without the numbers the rule is reported as not-applicable rather than broken.
+
+**`sl_price` is the stop you opened with, not your current one.** R is measured against
+initial risk, so record every stop change as an `sl_moved` event and leave `sl_price`
+alone. A stop trailed past entry has negative risk: the journal refuses to produce an R
+for it rather than reporting an inverted one.
 R-multiple, PnL and every statistic are computed by `journal/analytics.py`; you
 never type them. Anything you don't say is stored as NULL, not guessed. Tags are
 free-form (Thai works) and unknown ones are created on the fly.

@@ -38,11 +38,19 @@ _PERIOD_DAYS = {"d": 1, "w": 7, "m": 30, "y": 365}
 
 # ── per-trade arithmetic ─────────────────────────────────────────────────────
 def r_multiple(direction: str, entry: float | None, sl: float | None, exit_: float | None) -> float | None:
-    """Signed R. ``None`` when any leg is missing or the stop equals the entry."""
+    """Signed R against the trade's initial risk. ``None`` when a leg is missing
+    or the risk is not positive.
+
+    ``sl`` must be the stop the trade was *opened* with — R is measured against
+    initial risk, and a stop trailed past entry has negative risk, which would
+    inverse the sign (a winner would come out as a large negative R and be
+    derived as a LOSS). Record trailing moves as ``sl_moved`` events instead of
+    overwriting ``sl_price``.
+    """
     if entry is None or sl is None or exit_ is None:
         return None
     risk = entry - sl if direction == "LONG" else sl - entry
-    if risk == 0:
+    if risk <= 0:
         return None
     gain = exit_ - entry if direction == "LONG" else entry - exit_
     return gain / risk

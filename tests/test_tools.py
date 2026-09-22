@@ -124,12 +124,33 @@ def test_skip_signal_and_recent_signals(tools):
     assert tools.search_trades(status="SKIPPED")["n"] == 1
 
 
+def test_update_trade_rechecks_the_rules():
+    """A risk stated after the trade was logged must still break the max-risk rule —
+    update_trade used to be the one write path that skipped rules.check()."""
+    db = JournalDB(":memory:", account_size=331.31)
+    t = Tools(db)
+    tid = t.add_trade("SOL", "LONG", entry_price=100, sl_price=95)["trade"]["id"]
+    assert t.get_trade(tid)["rule_violations"] == []
+
+    out = t.update_trade(tid, risk_amount=34.6)          # 10.4% of the account
+    assert out["trade"]["risk_pct"] == pytest.approx(10.44, abs=0.01)
+    assert "Max risk 1%" in {v["name"] for v in out["rule_violations"]}
+    # and it is persisted, not just returned
+    assert "Max risk 1%" in {v["name"] for v in t.get_trade(tid)["rule_violations"]}
+
+    out = t.update_trade(tid, risk_amount=2.0)           # back under 1%
+    assert "Max risk 1%" not in {v["name"] for v in out["rule_violations"]}
+    assert t.get_trade(tid)["rule_violations"] == []     # stale violation cleared
+    db.close()
+
+
 def test_tags_rules_update(tools):
     assert tools.add_tag("Sweep Reversal", "SETUP")["category"] == "SETUP"
     assert any(t["name"] == "Sweep Reversal" for t in tools.list_tags())
     tid = tools.add_trade("SOL", "LONG")["trade"]["id"]
     assert tools.tag_trade(tid, ["Sweep Reversal"], "ENTRY")["trade"]["entry_tags"] == ["Sweep Reversal"]
     assert tools.update_trade(tid, notes="n", confidence=4)["trade"]["confidence"] == 4
+    assert "rule_violations" in tools.update_trade(tid, notes="n2")
     r = tools.add_rule("4H only", {"field": "tf", "op": "==", "value": "4H"}, "low")
     assert any(x["name"] == "4H only" for x in tools.list_rules())
     tools.set_rule_enabled(r["id"], False)

@@ -524,12 +524,18 @@ class JournalDB:
         )
 
     def update_trade(self, trade_id: int, **fields: Any) -> Trade:
-        """Edit arbitrary columns (no recomputation — use close_trade for exits)."""
+        """Edit arbitrary columns (no R/PnL recomputation — use close_trade for
+        exits). ``risk_pct`` is filled from a newly set ``risk_amount`` exactly as
+        ``add_trade`` does, so a risk stated after the fact still reaches the
+        "max risk %" rule instead of leaving it permanently not-applicable."""
         bad = set(fields) - set(_TRADE_COLUMNS)
         if bad:
             raise ValueError(f"unknown trade fields: {sorted(bad)}")
         if not fields:
             return self.get_trade(trade_id)  # type: ignore[return-value]
+        if (fields.get("risk_amount") is not None and "risk_pct" not in fields
+                and self.account_size):
+            fields["risk_pct"] = fields["risk_amount"] / self.account_size * 100
         sets = ", ".join(f"{k}=?" for k in fields)
         self.conn.execute(
             f"UPDATE trades SET {sets}, updated_ts=? WHERE id=?",

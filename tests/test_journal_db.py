@@ -155,6 +155,28 @@ def test_risk_pct_from_account_size():
     d.close()
 
 
+def test_risk_pct_derived_on_update_too():
+    """A risk stated after the trade was logged must still reach the % rule."""
+    d = JournalDB(":memory:", account_size=10_000)
+    t = d.add_trade("SOL-USDT-SWAP", "LONG", entry_price=100)
+    assert t.risk_pct is None and t.risk_amount is None
+    u = d.update_trade(t.id, risk_amount=150)
+    assert u.risk_amount == 150 and u.risk_pct == pytest.approx(1.5)
+    # an explicit risk_pct wins, and other edits don't invent one
+    u = d.update_trade(t.id, risk_amount=300, risk_pct=9.9)
+    assert u.risk_pct == pytest.approx(9.9)
+    u = d.update_trade(t.id, sl_price=90)
+    assert u.risk_pct == pytest.approx(9.9)
+    d.close()
+
+
+def test_no_risk_pct_without_account_size():
+    d = JournalDB(":memory:")
+    t = d.add_trade("SOL-USDT-SWAP", "LONG")
+    assert d.update_trade(t.id, risk_amount=150).risk_pct is None
+    d.close()
+
+
 def test_close_trade_computes_r_and_outcome(db):
     t = db.add_trade("SOL-USDT-SWAP", "LONG", entry_price=100, sl_price=90, tp_price=120)
     c = db.close_trade(t.id, 115, exit_reason="hit target", exit_tags=["Hit TP"])

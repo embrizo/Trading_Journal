@@ -427,8 +427,13 @@ class Tools:
         return self.db.add_screenshot(trade_id, phase, path).to_dict()
 
     def update_trade(self, trade_id: int, **fields: Any) -> dict:
-        """WRITE: edit trade fields (notes, confidence, emotion_*, sl/tp plan changes ...)."""
-        return {"trade": trade_dict(self.db.update_trade(trade_id, **fields), full=True)}
+        """WRITE: edit trade fields (notes, confidence, emotion_*, sl/tp plan changes ...).
+        Re-checks the rules like every other write path — a risk or a stop stated
+        after the trade was logged must still reach them."""
+        t = self.db.update_trade(trade_id, **fields)
+        check = rules.check(self.db, t)
+        rules.record_violations(self.db, t.id, check)
+        return _json({"trade": trade_dict(t, full=True), "rule_violations": check["violations"]})
 
     def add_rule(self, name: str, condition: dict, severity: str = "high") -> dict:
         """WRITE: add a structured rule, e.g. {"field":"risk_pct","op":"<=","value":1}."""

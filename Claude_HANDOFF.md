@@ -1,6 +1,6 @@
 # Claude handoff — Break Signal
 
-**Last Updated:** 2026-09-22
+**Last Updated:** 2026-09-23
 **Workspace:** `G:\7Days\Trading_Journal` (moved from `Break_Signal` on 2026-09-20)
 **Repo:** https://github.com/embrizo/Trading_Journal (`main`) — the old `Break_Signal` remote is archived
 **Primary Language/Runtime:** Python 3.11+ (asyncio); Pine Script v6 (Phase 1)
@@ -13,7 +13,7 @@ that does real work.
 ## Status: journal + AI coach fully built (J0–J6), awaiting live checks and the Pi deploy (2026-09-20)
 
 Everything in [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md)
-§5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested (235 tests + 3
+§5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested (239 tests + 3
 key-gated live evals) and pushed.
 The three front-ends (CLI, Claude Code MCP, Telegram bot) share one `Tools` surface;
 `analytics.py` is the only place numbers are computed. What has NOT been exercised
@@ -83,7 +83,7 @@ Full spec: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — algorithm (§2
 ## Quick run commands
 
 ```bash
-# All tests — numpy + pytest (+ aiohttp/websockets/mcp/anthropic for the wiring tests); 235 pass, 3 live skipped
+# All tests — numpy + pytest (+ aiohttp/websockets/mcp/anthropic for the wiring tests); 239 pass, 3 live skipped
 python -m pytest tests/ -q
 ANTHROPIC_API_KEY=... python -m pytest tests/evals -q      # 3 live coach evals, cost money
 
@@ -158,7 +158,12 @@ URL will fail on push rather than diverge — repoint it with
 - **Third local run — end-to-end with a populated journal** (11 seeded trades on a scratch DB). Both fixes verified in situ: exactly 3 widening violations recorded from 5 `sl_moved` events (the 2 trailing ones excluded), and the derived rule memory cites only those three (`#1, #2, #3`). Memory derivation produced all 5 pattern memories + 2 rule memories with correct n/win-rate; the dashboard rendered them, PF 2.50 and an 11-point equity curve; `/api/summary` is strict JSON. Also drove the **MCP server over stdio** (29 tools): `journal_stats`, `journal_tag_stats`, `journal_memories`, `journal_rule_check` (a proposed FOMO trade breaks only "No FOMO entries"; "Never widen the stop" passes), `journal_similar_trades`, `journal_get_trade` — trade #1 (widened) carries the violation, #4 (trailed) does not, which is what the coach would see. Mobile check at 375 px: no page overflow; wide tables scroll inside `div.scroll`. Note for future driving of the MCP surface: `journal_rule_check` takes a `proposed` dict but `journal_similar_trades` takes flat args with `k` (not `limit`) — extras are silently ignored.
 - Added `tests/test_dashboard_lines.py` (9 tests) for the trendline segments the dashboard draws — see the J6 entry below.
 - User decision: **they will move the coach to the Gemini API themselves.** Don't build Anthropic-side work unasked; the seams are listed in Next steps #0.
-- **First real trades in `data/journal.db`** (2026-09-23): the user's 4 open exchange positions, logged from app screenshots — symbol, direction, entry price and leverage only. No SL/TP (not set yet — they will add them), no `position_size` (the screens give USDT notional, and `analytics.pnl_amount` multiplies size by the price move, so a notional there would be wrong); the observed notional/margin/liq. price sit in each trade's `notes` verbatim. Until a stop exists these trades have no R, so they stay out of every R-based statistic. The DB is gitignored; `pic/` (exchange screenshots) is now gitignored too — **the repo is public**, so screenshots and journal data must never be committed.
+- **First real trades in `data/journal.db`** (2026-09-23): the user's 4 open exchange positions, logged from app screenshots — symbol, direction, entry, leverage, initial stop and the USDT risk they stated. No `position_size` (the screens give USDT notional, and `analytics.pnl_amount` multiplies size by the price move, so a notional there would be wrong); notional/margin/liq. price sit in each trade's `notes`. `journal.account_size` is set to their equity, so `risk_pct` is derived — all four breach "Max risk 1%" (5–15%), which produced the journal's first real memory. The DB is gitignored; `pic/` (exchange screenshots) is now gitignored too — **the repo is public**, so screenshots and journal data must never be committed.
+- **Three bugs found while logging those positions** (all fixed, tests added, 239 pass):
+  1. **R inverted when the stop sits beyond entry.** The user trailed two stops past break-even. `r_multiple` only guarded `risk == 0`, so negative risk flipped the sign: a winning ZRO exit came out as **−30.6R → LOSS** (SUI −129R). Now `risk <= 0` → `None`, and the convention is explicit everywhere: **`sl_price` is the initial stop, trailing moves are `sl_moved` events**. `planned_rr` inherits the guard.
+  2. **`risk_pct` never derived on update.** `add_trade` fills it from `account_size`; `db.update_trade` did not, so a risk stated after the fact stayed percent-less and the max-risk rule was permanently not-applicable. Now both paths behave the same (explicit `risk_pct` still wins).
+  3. **`Tools.update_trade` was the only write path not re-running `rules.check`.** Edits never updated `rule_violations` — stale ones survived, new breaches were never recorded. Now it checks and records like `add_trade`/`close_trade`/`add_event`. See the rule in `CLAUDE.md`.
+- Note: the CLI has **no `update` command** — `update_trade` exists only on the Tools/MCP surface. Worth adding if editing from the shell comes up again.
 - **Repo moved to https://github.com/embrizo/Trading_Journal** (2026-09-22), matching the folder name. Done with `git remote set-url origin` + `git push -u origin main`, so all 27 commits came across — *not* with GitHub's "create a new repository on the command line" snippet the user pasted, which would have appended a stray line to the README, added a "first commit" on top of the real history, and then failed on `git remote add origin`. Verified the new remote's `main` matched local and that the old repo held no extra branches or tags before touching it. `embrizo/Break_Signal` is **archived**, not deleted (the user asked for delete, then chose archive; deleting a repo is theirs to run, not mine). README retitled `# Trading Journal` with a lead paragraph that names Break Signal as the engine — the package, the Pine script and `IMPLEMENTATION_PLAN.md` keep the old name.
 
 ### Session 5 — 2026-09-20
