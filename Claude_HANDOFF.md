@@ -1,7 +1,8 @@
 # Claude handoff — Break Signal
 
 **Last Updated:** 2026-09-22
-**Workspace:** `G:\7Days\Trading_Journal` (moved from `Break_Signal` on 2026-09-20; same git repo + remote)
+**Workspace:** `G:\7Days\Trading_Journal` (moved from `Break_Signal` on 2026-09-20)
+**Repo:** https://github.com/embrizo/Trading_Journal (`main`) — the old `Break_Signal` remote is archived
 **Primary Language/Runtime:** Python 3.11+ (asyncio); Pine Script v6 (Phase 1)
 
 Read this first in any new session on this project. Update it at the end of every session
@@ -109,7 +110,12 @@ AI_ENABLED=1 ANTHROPIC_API_KEY=... docker compose up -d --build
 
 ## Current state
 
-**Repo:** https://github.com/embrizo/Break_Signal — `main`. `data/` layer + `.gitignore` fix committed as `3590c43` (2026-09-07), not yet pushed.
+**Repo:** https://github.com/embrizo/Trading_Journal — `main`, everything pushed and in sync.
+Moved there on 2026-09-22 with all history (`git remote set-url` + push, 27 commits at the time);
+the previous remote https://github.com/embrizo/Break_Signal is **archived** (read-only, last
+commit `0395b42`, an ancestor of what is on the new repo). Another clone still pointing at the old
+URL will fail on push rather than diverge — repoint it with
+`git remote set-url origin https://github.com/embrizo/Trading_Journal.git`.
 
 **Milestone status (corrected):**
 
@@ -152,6 +158,7 @@ AI_ENABLED=1 ANTHROPIC_API_KEY=... docker compose up -d --build
 - **Third local run — end-to-end with a populated journal** (11 seeded trades on a scratch DB). Both fixes verified in situ: exactly 3 widening violations recorded from 5 `sl_moved` events (the 2 trailing ones excluded), and the derived rule memory cites only those three (`#1, #2, #3`). Memory derivation produced all 5 pattern memories + 2 rule memories with correct n/win-rate; the dashboard rendered them, PF 2.50 and an 11-point equity curve; `/api/summary` is strict JSON. Also drove the **MCP server over stdio** (29 tools): `journal_stats`, `journal_tag_stats`, `journal_memories`, `journal_rule_check` (a proposed FOMO trade breaks only "No FOMO entries"; "Never widen the stop" passes), `journal_similar_trades`, `journal_get_trade` — trade #1 (widened) carries the violation, #4 (trailed) does not, which is what the coach would see. Mobile check at 375 px: no page overflow; wide tables scroll inside `div.scroll`. Note for future driving of the MCP surface: `journal_rule_check` takes a `proposed` dict but `journal_similar_trades` takes flat args with `k` (not `limit`) — extras are silently ignored.
 - Added `tests/test_dashboard_lines.py` (9 tests) for the trendline segments the dashboard draws — see the J6 entry below.
 - User decision: **they will move the coach to the Gemini API themselves.** Don't build Anthropic-side work unasked; the seams are listed in Next steps #0.
+- **Repo moved to https://github.com/embrizo/Trading_Journal** (2026-09-22), matching the folder name. Done with `git remote set-url origin` + `git push -u origin main`, so all 27 commits came across — *not* with GitHub's "create a new repository on the command line" snippet the user pasted, which would have appended a stray line to the README, added a "first commit" on top of the real history, and then failed on `git remote add origin`. Verified the new remote's `main` matched local and that the old repo held no extra branches or tags before touching it. `embrizo/Break_Signal` is **archived**, not deleted (the user asked for delete, then chose archive; deleting a repo is theirs to run, not mine). README retitled `# Trading Journal` with a lead paragraph that names Break Signal as the engine — the package, the Pine script and `IMPLEMENTATION_PLAN.md` keep the old name.
 
 ### Session 5 — 2026-09-20
 - User supplied `trading_journal_implementation_plan_AI_extended.md` (journal + AI copilot concept, Next.js/Supabase/LangGraph stack — file not kept in repo) and asked to integrate it with Break Signal plus an "AI suggestion" feature: log trades with win/loss + reason, then ask Claude in chat for price-action suggestions grounded in that history.
