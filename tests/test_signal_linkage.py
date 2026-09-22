@@ -177,9 +177,9 @@ def test_backfill_retries_until_data(monkeypatch):
     async def fake_sleep(s):
         sleeps.append(s)
 
-    monkeypatch.setattr(W.okx_rest, "fetch_candles", flaky_fetch)
     monkeypatch.setattr(W.asyncio, "sleep", fake_sleep)
     w = Watcher(_cfg(), _cfg().watches[0], State(":memory:"), [])
+    monkeypatch.setattr(w.rest, "fetch_candles", flaky_fetch)   # whichever exchange is configured
     candles = asyncio.run(w._backfill())
     assert len(candles) > 0 and calls["n"] == 3
     assert sleeps == [W.BACKFILL_RETRY_BASE, W.BACKFILL_RETRY_BASE * 2]   # exponential backoff

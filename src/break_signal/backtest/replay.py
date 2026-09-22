@@ -21,7 +21,7 @@ from ..config import bar_seconds
 from ..core.engine import Engine
 from ..core.params import Params
 from ..core.types import Candles, Signal
-from ..data import okx_rest
+from ..data import rest as data_rest
 
 
 def replay_signals(candles: Candles, params: Params, tf: str, symbol: str,
@@ -69,7 +69,8 @@ def write_to_journal(db_path: str, signals: list[Signal], source: str = "backtes
 
 async def _main(args) -> int:
     async with aiohttp.ClientSession() as session:
-        candles = await okx_rest.fetch_candles(session, args.symbol, args.tf, args.limit)
+        candles = await data_rest(args.exchange).fetch_candles(
+            session, args.symbol, args.tf, args.limit)
     if len(candles) == 0:
         print("No candles fetched.", file=sys.stderr)
         return 1
@@ -98,6 +99,8 @@ async def _main(args) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Backtest the break-signal rules on OKX history")
     ap.add_argument("--symbol", default="SOL-USDT-SWAP")
+    ap.add_argument("--exchange", default="okx", choices=["okx", "binance"],
+                    help="where the candles come from (the symbol stays an instId)")
     ap.add_argument("--tf", default="1D")
     ap.add_argument("--limit", type=int, default=500)
     ap.add_argument("--out", default="signals.csv")

@@ -109,18 +109,19 @@ def _add_dashboard(app, cfg: "Config", db: JournalDB, tools: Tools) -> None:
             req.query.get("source") or None, _int(req, "limit", 50)))
 
     async def api_chart(req):
-        """Candles + engine lines + markers for one (symbol, tf). Needs OKX."""
+        """Candles + engine lines + markers for one (symbol, tf). Needs the exchange."""
         symbol = tools._sym(req.query.get("symbol", "SOL"))
         tf = req.query.get("tf", "1D")
         bars = min(_int(req, "bars", 300), 1000)
         try:
             import aiohttp
-            from ..data import okx_rest
+            from ..data import rest as data_rest
             async with aiohttp.ClientSession() as session:
-                candles = await okx_rest.fetch_candles(session, symbol, tf, bars)
+                candles = await data_rest(cfg.exchange).fetch_candles(session, symbol, tf, bars)
         except Exception as e:  # noqa: BLE001
             return respond({"symbol": symbol, "tf": tf,
-                            "error": f"OKX fetch failed: {e.__class__.__name__}: {e}"}, status=502)
+                            "error": f"{cfg.exchange.upper()} fetch failed: {e.__class__.__name__}: {e}"},
+                           status=502)
         from .tools import snapshot_from_candles
         snap = snapshot_from_candles(symbol, tf, candles, tools.params)
         ohlc = [{"time": int(candles.ts[i]) // 1000, "open": float(candles.open[i]), "high": float(candles.high[i]),

@@ -289,20 +289,24 @@ class Tools:
 
     # ── market ──────────────────────────────────────────────────────────
     async def market_snapshot(self, symbol: str, tf: str, bars: int = 300) -> dict:
-        """FACT (live OKX candles) + CALC (engine): price, ATR, RSI, active lines
-        with distances, and whether a breakout fired on the last confirmed bar."""
+        """FACT (live candles) + CALC (engine): price, ATR, RSI, active lines with
+        distances, and whether a breakout fired on the last confirmed bar."""
         import aiohttp
-        from ..data import okx_rest
+        from ..data import rest as data_rest
+        exchange = (self.cfg.exchange if self.cfg else "okx")
+        rest = data_rest(exchange)
         symbol = self._sym(symbol)
         try:
             async with aiohttp.ClientSession() as session:
-                candles = await okx_rest.fetch_candles(session, symbol, tf, bars)
-        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
-            return {"symbol": symbol, "tf": tf, "error": f"OKX fetch failed ({e.__class__.__name__}: {e}). "
-                    f"Host: {okx_rest.REST_URL}. If OKX is geo-blocked here, set OKX_REST_URL "
-                    f"(e.g. https://aws.okx.com) in .mcp.json env or use a VPN."}
+                candles = await rest.fetch_candles(session, symbol, tf, bars)
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError) as e:
+            return {"symbol": symbol, "tf": tf, "exchange": exchange,
+                    "error": f"{exchange.upper()} fetch failed ({e.__class__.__name__}: {e}). "
+                    f"Host: {rest.REST_URL}. If it is blocked here, set `exchange: binance` "
+                    f"in config.yaml, or point OKX_REST_URL / BINANCE_REST_URL at another host."}
         if len(candles) == 0:
-            return {"symbol": symbol, "tf": tf, "error": "OKX returned no candles (bad symbol/tf?)"}
+            return {"symbol": symbol, "tf": tf, "exchange": exchange,
+                    "error": f"{exchange.upper()} returned no candles (bad symbol/tf?)"}
         broken: set[str] = set()
         if self.state_db:
             try:

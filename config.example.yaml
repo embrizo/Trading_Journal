@@ -1,7 +1,12 @@
 # Break Signal — configuration
 # Copy to config.yaml and fill in the secrets. config.yaml is gitignored.
 
-exchange: okx                 # only "okx" implemented (Phase 2)
+exchange: okx                 # okx | binance — where candles come from (REST backfill +
+                              # live stream). Symbols stay OKX-style instIds either way;
+                              # the Binance provider translates (SOL-USDT-SWAP -> SOLUSDT
+                              # on USDⓈ-M futures). Switch if your ISP blocks one of them.
+                              # Hosts: OKX_REST_URL / OKX_WS_URL / BINANCE_REST_URL /
+                              # BINANCE_WS_URL override the defaults.
 
 # One watcher is started per (symbol, timeframe) pair.
 watches:

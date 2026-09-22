@@ -1,6 +1,7 @@
 # Trading Journal
 
-A trade journal with an alert engine attached, for **OKX perpetual futures**.
+A trade journal with an alert engine attached, for **perpetual futures** on
+**OKX** or **Binance** (`exchange:` in `config.yaml` — one line, no other change).
 
 **Break Signal**, the engine, finds valid support/resistance trendlines with no
 manual drawing, watches every candle *close*, and pushes a high-conviction
@@ -40,8 +41,27 @@ python -m break_signal -c config.yaml
 ```
 
 `config.yaml` is gitignored — your bot token and webhook URL never get committed.
-No exchange API keys are needed; the service only reads public OKX market data and
+No exchange API keys are needed; the service only reads public market data and
 never places orders.
+
+### Choosing the exchange
+
+```yaml
+exchange: binance     # or okx (default)
+```
+
+That switches the REST backfill, the live candle stream, `market_snapshot` and the
+dashboard chart. Symbols stay OKX-style instIds everywhere — in the config, the
+journal and the Pine script — and the Binance provider translates at its own edge
+(`SOL-USDT-SWAP` → `SOLUSDT` on USDⓈ-M futures, `4H` → `4h`), so switching never
+rewrites anything you have stored. Useful when one of the two is geo-blocked or
+DNS-blocked where you run it; `OKX_REST_URL`, `OKX_WS_URL`, `BINANCE_REST_URL` and
+`BINANCE_WS_URL` move the hosts within a provider.
+
+The two exchanges are different markets, so their candles differ slightly and the
+signals will too. If you tune against `OKX:SOLUSDT.P` in TradingView, keep
+`exchange: okx` for parity with the Pine script; each stored alert records which
+exchange produced it.
 
 ## Run on a Raspberry Pi 5 (Docker)
 
@@ -68,9 +88,10 @@ For the AI coach in the container, build with the SDK and pass the key through:
 AI_ENABLED=1 ANTHROPIC_API_KEY=sk-ant-... docker compose up -d --build
 ```
 
-(or put both in a `.env` file next to `docker-compose.yml`). `OKX_REST_URL` /
-`OKX_WS_URL` in the same place switch to a regional OKX host if the default is
-geo-blocked where the Pi lives.
+(or put both in a `.env` file next to `docker-compose.yml`). If the exchange is
+blocked where the Pi lives, switch `exchange:` in `config.yaml`, or put
+`OKX_REST_URL` / `OKX_WS_URL` / `BINANCE_REST_URL` / `BINANCE_WS_URL` in that same
+`.env` to move to a regional host.
 
 The nightly backup is an online SQLite snapshot (`journal backup` does the same
 by hand; `journal backup --verify <file>` integrity-checks one). Every snapshot
@@ -144,8 +165,8 @@ package). Open Claude Code in this repo and talk to it:
 Claude reads `CLAUDE.md` for the coach rules: every number comes from a tool
 result with its sample size, past trades are cited by id, suggestions are
 conditional price-action to watch — never "buy" or "sell" — and it asks before
-writing to the journal. `market_snapshot` needs OKX reachable (`OKX_REST_URL`
-env to switch host if geo-blocked).
+writing to the journal. `market_snapshot` needs the configured exchange reachable
+(switch `exchange:` or the `*_REST_URL` env if one is blocked).
 
 ### Telegram bot + AI coach on the phone
 
@@ -243,7 +264,8 @@ blocks Telegram.
 pine/break_signal.pine        TradingView Pine v6 indicator (Phase 1)
 src/break_signal/
   core/        pivots, trendline, breakout, engine, indicators, state
-  data/        okx_rest (backfill), okx_ws (live stream)
+  data/        okx_rest/okx_ws, binance_rest/binance_ws — one provider pair per
+               exchange behind data.provider(); picked by config `exchange:`
   notify/      telegram, discord (alerts); telegram_bot (commands + /ask)
   render/      mplfinance chart snapshot
   backtest/    offline replay -> CSV

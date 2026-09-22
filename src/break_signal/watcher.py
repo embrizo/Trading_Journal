@@ -12,8 +12,8 @@ from .config import Config, Watch, bar_seconds
 from .core.engine import Engine
 from .core.state import State
 from .core.types import Candles, Signal
-from .data import okx_rest
-from .data.okx_ws import ClosedCandle, stream_closed_candles
+from .data import provider
+from .data.okx_ws import ClosedCandle
 from .notify.base import Notifier, format_message
 
 if TYPE_CHECKING:
@@ -33,6 +33,9 @@ class Watcher:
         self.tf = watch.timeframe
         self.state = state
         self.notifiers = notifiers
+        # Market data comes from whichever exchange `config.exchange` names; the
+        # symbol stays a canonical instId either way.
+        self.rest, self.ws = provider(cfg.exchange)
         # Optional trade journal: every alert becomes a `signals` row a trade can
         # link to, and alerts gain a "your history on this setup" footer.
         self.journal = journal
@@ -40,7 +43,7 @@ class Watcher:
             params=cfg.to_params(),
             tf_seconds=bar_seconds(self.tf),
             symbol=self.symbol,
-            exchange="OKX",
+            exchange=cfg.exchange.upper(),
             tf_label=self.tf,
         )
         self.candles: Candles | None = None
@@ -52,7 +55,7 @@ class Watcher:
         # Prime state so historical breaks in the backfill don't fire on startup.
         self._prime_broken()
 
-        async for candle in stream_closed_candles(self.symbol, self.tf):
+        async for candle in self.ws.stream_closed_candles(self.symbol, self.tf):
             try:
                 self._append(candle)
                 await self._on_close()
@@ -72,7 +75,7 @@ class Watcher:
             attempt += 1
             try:
                 async with aiohttp.ClientSession() as session:
-                    candles = await okx_rest.fetch_candles(
+                    candles = await self.rest.fetch_candles(
                         session, self.symbol, self.tf, self.cfg.backfill
                     )
                 if len(candles) == 0:

@@ -13,7 +13,7 @@ that does real work.
 ## Status: journal + AI coach fully built (J0–J6), awaiting live checks and the Pi deploy (2026-09-20)
 
 Everything in [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md)
-§5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested (244 tests + 3
+§5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested (267 tests + 3
 key-gated live evals) and pushed.
 The three front-ends (CLI, Claude Code MCP, Telegram bot) share one `Tools` surface;
 `analytics.py` is the only place numbers are computed. What has NOT been exercised
@@ -21,8 +21,10 @@ against real services from this machine:
 
 - the Anthropic API (`/ask`, `/review`, report narrative) — no key here
 - Telegram commands round-trip — no token here (handlers are unit-tested)
-- OKX — DNS-blocked on this machine (`market_snapshot`, watcher backfill/stream);
-  REST + WS were verified live on 2026-09-07 from the other machine
+- OKX — DNS-blocked on this ISP. **Worked around 2026-09-23: `exchange: binance`**
+  (see below), and with it the watcher, `market_snapshot` and the dashboard chart
+  all run live from here. OKX REST + WS were verified live on 2026-09-07 from the
+  other machine and remain the default.
 - Docker build on the Pi — `docker compose config` validates; image not built
 - `chart_png` — matplotlib not installed locally
 
@@ -51,7 +53,9 @@ Full spec: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — algorithm (§2
   - [engine.py](src/break_signal/core/engine.py) — ties pivots→lines→breaks per bar
   - [state.py](src/break_signal/core/state.py) — SQLite/WAL dedupe of sent alerts
   - `params.py`, `types.py` — config dataclasses + `Candle`/`Trendline` models
-- **`data/`** — written 2026-09-07: [okx_rest.py](src/break_signal/data/okx_rest.py) (paged backfill: `/candles` then `/history-candles` with `after`, confirmed bars only, reversed to oldest-first) + [okx_ws.py](src/break_signal/data/okx_ws.py) (live `wss://ws.okx.com:8443/ws/v5/business` stream, text `ping`/`pong` heartbeat after 20s idle, reconnect w/ backoff, yields only `confirm=="1"` candles). REST verified live; WS not yet run live. Override hosts via `OKX_REST_URL` / `OKX_WS_URL` env for geo-block fallback.
+- **`data/`** — one `(rest, ws)` provider pair per exchange behind [`data.provider(exchange)`](src/break_signal/data/__init__.py); `config.exchange` picks. Callers never import an exchange module directly, and **symbols are canonical OKX-style instIds everywhere** — each provider translates at its own edge.
+  - **OKX** (default, written 2026-09-07): [okx_rest.py](src/break_signal/data/okx_rest.py) (paged backfill: `/candles` then `/history-candles` with `after`, confirmed bars only, reversed to oldest-first) + [okx_ws.py](src/break_signal/data/okx_ws.py) (live `wss://ws.okx.com:8443/ws/v5/business`, text `ping`/`pong` after 20s idle, reconnect w/ backoff, only `confirm=="1"`). REST verified live 2026-09-07; WS not yet run live. Hosts: `OKX_REST_URL` / `OKX_WS_URL`.
+  - **Binance** USDⓈ-M futures (added 2026-09-23): [binance_rest.py](src/break_signal/data/binance_rest.py) (`/fapi/v1/klines`, 1500/call, paged backwards with `endTime`; no `confirm` flag, so the forming bar is dropped by `closeTime` vs the clock) + [binance_ws.py](src/break_signal/data/binance_ws.py) (`<sym>@kline_<interval>`, emits on `k.x == true`; the library answers Binance's ping frames, so no manual heartbeat). Both verified live from this machine. Hosts: `BINANCE_REST_URL` / `BINANCE_WS_URL`.
 - **`notify/`** — [base.py](src/break_signal/notify/base.py) protocol + [telegram.py](src/break_signal/notify/telegram.py) + [discord.py](src/break_signal/notify/discord.py); failures isolated per channel.
 - **`render/`** — [chart.py](src/break_signal/render/chart.py): mplfinance snapshot with lines drawn.
 - **`backtest/`** — [replay.py](src/break_signal/backtest/replay.py): growing-window replay → CSV.
@@ -60,7 +64,7 @@ Full spec: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — algorithm (§2
 
 ## Locked decisions
 
-- **Exchange:** OKX V5 public API, `instId=SOL-USDT-SWAP` (NOT Binance — plan §4 predates this and still says Binance in places; OKX is correct per §8).
+- **Exchange:** OKX V5 public API, `instId=SOL-USDT-SWAP`, is the reference — it is what the Pine indicator charts and what the params were tuned against, so keep it for parity. **Since 2026-09-23 Binance USDⓈ-M futures is a supported alternative** (`exchange: binance`) for when OKX is blocked; instIds stay the naming scheme either way. The plan §4 predates all of this and still says Binance in places for the wrong reason.
 - **Timeframes:** 1D and 4H.
 - **Quality mode:** strict — `atrBreak=0.30`, `minTouches=3`, `maxViolations=0`, volume + body filters ON.
 - **Notifications:** Telegram Bot API + Discord webhook, failures isolated.
@@ -83,7 +87,7 @@ Full spec: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — algorithm (§2
 ## Quick run commands
 
 ```bash
-# All tests — numpy + pytest (+ aiohttp/websockets/mcp/anthropic for the wiring tests); 244 pass, 3 live skipped
+# All tests — numpy + pytest (+ aiohttp/websockets/mcp/anthropic for the wiring tests); 267 pass, 3 live skipped
 python -m pytest tests/ -q
 ANTHROPIC_API_KEY=... python -m pytest tests/evals -q      # 3 live coach evals, cost money
 
@@ -158,6 +162,7 @@ URL will fail on push rather than diverge — repoint it with
 - **Third local run — end-to-end with a populated journal** (11 seeded trades on a scratch DB). Both fixes verified in situ: exactly 3 widening violations recorded from 5 `sl_moved` events (the 2 trailing ones excluded), and the derived rule memory cites only those three (`#1, #2, #3`). Memory derivation produced all 5 pattern memories + 2 rule memories with correct n/win-rate; the dashboard rendered them, PF 2.50 and an 11-point equity curve; `/api/summary` is strict JSON. Also drove the **MCP server over stdio** (29 tools): `journal_stats`, `journal_tag_stats`, `journal_memories`, `journal_rule_check` (a proposed FOMO trade breaks only "No FOMO entries"; "Never widen the stop" passes), `journal_similar_trades`, `journal_get_trade` — trade #1 (widened) carries the violation, #4 (trailed) does not, which is what the coach would see. Mobile check at 375 px: no page overflow; wide tables scroll inside `div.scroll`. Note for future driving of the MCP surface: `journal_rule_check` takes a `proposed` dict but `journal_similar_trades` takes flat args with `k` (not `limit`) — extras are silently ignored.
 - Added `tests/test_dashboard_lines.py` (9 tests) for the trendline segments the dashboard draws — see the J6 entry below.
 - User decision: **they will move the coach to the Gemini API themselves.** Don't build Anthropic-side work unasked; the seams are listed in Next steps #0.
+- **Binance as a second data provider** (2026-09-23) — the user's ISP DNS-blocks `www.okx.com`, so the chart had never once rendered here. `data/binance_rest.py` + `data/binance_ws.py` (USDⓈ-M futures) implement the same two functions as the OKX pair, and `data.provider(exchange)` dispatches; `config.exchange` (which existed and was unused) now picks. Call sites updated: watcher, `tools.market_snapshot`, `web.api_chart`, `replay --exchange`. **Symbols stay canonical OKX-style instIds everywhere** — config, journal, Pine — and each provider translates at its own edge (`SOL-USDT-SWAP`→`SOLUSDT`, `4H`→`4h`), so switching never rewrites stored data. Binance has no `confirm` flag, so the forming bar is dropped by comparing `closeTime` against the clock. 23 tests + 1 live. **Verified live from this machine**: both watchers backfilled 500 candles, both WS streams subscribed, and the dashboard chart finally drew — 300 candles, SOL 118.88, RSI 69.9, 5 engine trendlines, alert markers in place. Caveat worth keeping in mind: the two exchanges are different markets, so signals differ slightly; keep `exchange: okx` if parity with the TradingView Pine on `OKX:SOLUSDT.P` matters. Each stored signal records its exchange.
 - **Dashboard can write now** (2026-09-23). The user opened the page and found nothing to click — J6 shipped it read-only, every route a GET. Added `POST /api/do {"cmd": "..."}`: the CLI's one-line syntax (`add` / `close` / `skip` / `event` / `sl` / `tag` / `note` / `help`) routed through `Tools`, so rule checks, auto-link and ctx copy behave as everywhere else, and `rule_violations` come back to the page. `sl <id> <price>` deliberately logs an `sl_moved` event (chaining `from` off the previous move) instead of touching `sl_price`, which is what keeps R measured against initial risk. Guarded by `web.write_token` (`X-Journal-Token`, `hmac.compare_digest`): unset → the route is not registered at all and the page hides its command bar, so the default install is unchanged. Per-open-trade buttons prefill the box rather than acting. 5 tests in `tests/test_dashboard_write.py`; driven for real in the browser (add → sl → close, stats updating live, 403 on a bad token). Caught while looking: `map(tradeRow)` passes the array index as the second argument, so every row after the first grew action buttons — always `map(t => tradeRow(t))`.
 - The dashboard HTML is served with Cache-Control: no-cache (found on a later run: the browser kept showing the pre-update page until a cache-busting query string was added — after a deploy you would see the old UI and assume nothing changed). FileResponse still sends Last-Modified/ETag, so an unchanged page is a 304.
 - **WAL gotcha for scratch copies:** `data/journal.db` runs in WAL mode, so `Copy-Item journal.db` alone gives a stale file (it showed 0 trades). Use `journal backup --dir <scratch>` — it does a proper online snapshot and checkpoints to a single file.
