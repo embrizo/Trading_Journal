@@ -1,11 +1,15 @@
-# Break Signal
+# Trading Journal
 
-Automated trendline detection & breakout alerts for **OKX perpetual futures**.
-It finds valid support/resistance trendlines with no manual drawing, watches
-every candle *close*, and pushes a high-conviction breakout alert (with a chart)
-to **Telegram** and **Discord**.
+A trade journal with an alert engine attached, for **OKX perpetual futures**.
 
-Two implementations of the same algorithm:
+**Break Signal**, the engine, finds valid support/resistance trendlines with no
+manual drawing, watches every candle *close*, and pushes a high-conviction
+breakout alert (with a chart) to **Telegram** and **Discord**. Every alert is
+stored, so the [journal](#trade-journal) can link what you actually did to the
+setup that prompted it, and the [AI coach](#ai-coach-in-claude-code) can answer
+"what does my history say?" from numbers it never computes itself.
+
+Two implementations of the same alert algorithm:
 
 - **Phase 1 — TradingView Pine indicator** (`pine/break_signal.pine`): draws the
   lines and fires alerts inside TradingView. Best for eyeballing/tuning the rules.
