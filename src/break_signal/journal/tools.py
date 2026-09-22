@@ -68,13 +68,14 @@ def trade_dict(t: Trade, full: bool = False) -> dict:
         "opened": _iso(t.opened_ts), "closed": _iso(t.closed_ts),
         "entry_tags": t.entry_tags, "exit_tags": t.exit_tags,
         "entry_reason": t.entry_reason, "exit_reason": t.exit_reason,
+        "notes": t.notes,
         "ctx_rsi": t.ctx_rsi, "ctx_atr_dist": t.ctx_atr_dist, "ctx_session": t.ctx_session,
     }
     if full:
         d.update({
             "position_size": t.position_size, "leverage": t.leverage, "fees": t.fees,
             "risk_amount": t.risk_amount, "risk_pct": t.risk_pct, "confidence": t.confidence,
-            "emotion_before": t.emotion_before, "emotion_after": t.emotion_after, "notes": t.notes,
+            "emotion_before": t.emotion_before, "emotion_after": t.emotion_after,
             "ctx_atr": t.ctx_atr, "ctx_vol_ratio": t.ctx_vol_ratio,
             "opened_ts": t.opened_ts, "closed_ts": t.closed_ts,
             "events": [{"id": e.id, "type": e.type, "data": e.data, "ts": _iso(e.event_ts)} for e in t.events],

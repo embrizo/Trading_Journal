@@ -52,7 +52,10 @@
 <body>
 <header>
   <h1>Break Signal · journal</h1>
-  <select id="symbol"></select>
+  <input id="symbol" list="symbol-list" placeholder="e.g. BTC" autocomplete="off"
+         style="text-transform:uppercase; width:160px; background:var(--panel); color:var(--fg);
+                border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit">
+  <datalist id="symbol-list"></datalist>
   <select id="tf"></select>
   <button id="reload">Reload</button>
   <span id="status" class="muted"></span>
@@ -153,16 +156,25 @@ function stats(el, s) {
   el.innerHTML = items.map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 }
 function tradeRow(t, actions = false) {
-  const act = actions && canWrite ? `<td class="act">
+  const openAct = actions && canWrite ? `
     <button class="btn-xs" data-cmd="close ${t.id} ">close</button>
     <button class="btn-xs" data-cmd="sl ${t.id} ">sl</button>
-    <button class="btn-xs" data-cmd="tag ${t.id} #">tag</button>
-    <button class="btn-xs" data-cmd="note ${t.id} ">note</button></td>` : '';
-  return `<tr><td>#${t.id}</td><td>${t.status}</td><td>${esc(t.symbol)} ${esc(t.tf || '')}</td><td>${t.direction}</td>
+    <button class="btn-xs" data-cmd="tag ${t.id} #">tag</button>` : '';
+  const noteBtn = canWrite ? `<button class="btn-xs" data-cmd="note ${t.id} ">note</button>` : '';
+  const act = (openAct || noteBtn) ? `<td class="act">${openAct}${noteBtn}</td>` : '';
+  // Build a tooltip + detail snippet from reasons / notes
+  const meta = [];
+  if (t.entry_reason) meta.push(`Entry: ${t.entry_reason}`);
+  if (t.exit_reason) meta.push(`Exit: ${t.exit_reason}`);
+  if (t.notes) meta.push(`Note: ${t.notes}`);
+  const hasNote = meta.length > 0;
+  const badge = hasNote ? ` <span title="${esc(meta.join(' | '))}" style="cursor:help">📝</span>` : '';
+  const detailRow = hasNote ? `<tr class="note-detail" style="display:none"><td colspan="13" style="padding:6px 12px;white-space:normal;color:var(--muted);font-size:12px;border-bottom:1px solid var(--line)">${meta.map(m => `<div>${esc(m)}</div>`).join('')}</td></tr>` : '';
+  return `<tr class="trade-row" style="cursor:${hasNote ? 'pointer' : 'default'}" data-has-note="${hasNote}"><td>#${t.id}${badge}</td><td>${t.status}</td><td>${esc(t.symbol)} ${esc(t.tf || '')}</td><td>${t.direction}</td>
     <td>${fmt(t.entry_price, 4)}</td><td>${fmt(t.sl_price, 4)}</td><td>${fmt(t.tp_price, 4)}</td><td>${fmt(t.exit_price, 4)}</td>
     <td>${t.outcome || ''}</td><td class="${cls(t.r_multiple)}">${t.r_multiple == null ? '' : fmt(t.r_multiple) + 'R'}</td>
     <td>${(t.entry_tags || []).concat(t.exit_tags || []).map(x => `<span class="tag">${esc(x)}</span>`).join('')}</td>
-    <td class="muted">${esc(t.opened || '')}</td>${act}</tr>`;
+    <td class="muted">${esc(t.opened || '')}</td>${act}</tr>${detailRow}`;
 }
 async function loadPanels() {
   const s = await j('/api/summary');
@@ -235,18 +247,39 @@ function wireWrites(cfg) {
     $('#cmd').value = b.dataset.cmd;
     $('#cmd').focus();
   });
+  // Click trade row to expand/collapse notes detail
+  document.addEventListener('click', e => {
+    const row = e.target.closest('tr.trade-row[data-has-note="true"]');
+    if (!row || e.target.closest('button')) return;  // don't toggle when clicking buttons
+    const detail = row.nextElementSibling;
+    if (detail && detail.classList.contains('note-detail')) {
+      detail.style.display = detail.style.display === 'none' ? '' : 'none';
+    }
+  });
 }
 
 // ── boot ────────────────────────────────────────────────────────────────────
 (async () => {
   const cfg = await j('/api/config');
   wireWrites(cfg);
-  const syms = [...new Set(cfg.watches.map(w => w.symbol))], tfs = [...new Set(cfg.watches.map(w => w.tf))];
-  if (!syms.length) { syms.push('SOL-USDT-SWAP'); tfs.push('1D'); }
-  $('#symbol').innerHTML = syms.map(s => `<option>${esc(s)}</option>`).join('');
-  $('#tf').innerHTML = [...new Set([...tfs, '1D', '4H'])].map(t => `<option>${esc(t)}</option>`).join('');
+  // Build symbol suggestions from watches + aliases + DB history
+  const watchSyms = cfg.watches.map(w => w.symbol);
+  const aliasKeys = Object.keys(cfg.aliases || {});
+  const aliasVals = Object.values(cfg.aliases || {});
+  const dbSyms = cfg.db_symbols || [];
+  const allSyms = [...new Set([...watchSyms, ...aliasKeys, ...aliasVals, ...dbSyms])];
+  if (!allSyms.length) allSyms.push('SOL-USDT-SWAP');
+  $('#symbol-list').innerHTML = allSyms.map(s => `<option value="${esc(s)}">`).join('');
+  $('#symbol').value = watchSyms[0] || allSyms[0];
+  // Timeframes
+  const tfs = [...new Set(cfg.watches.map(w => w.tf))];
+  $('#tf').innerHTML = [...new Set([...tfs, '1D', '4H', '1H', '15m'])].map(t => `<option>${esc(t)}</option>`).join('');
+  // Events
   $('#reload').onclick = () => { loadChart(); loadPanels(); };
-  $('#symbol').onchange = $('#tf').onchange = loadChart;
+  $('#tf').onchange = loadChart;
+  // Symbol: load chart on Enter key or when selecting from datalist
+  $('#symbol').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); loadChart(); } });
+  $('#symbol').addEventListener('change', loadChart);
   await Promise.all([loadPanels(), loadChart()]);
 })();
 </script>

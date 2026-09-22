@@ -52,13 +52,14 @@ class TelegramBotCfg(BaseModel):
 
 class AiCfg(BaseModel):
     enabled: bool = False
-    model: str = "claude-opus-5"
+    provider: str = "auto"           # auto | gemini | anthropic
+    model: str = "claude-opus-5"     # or gemini-3.6-flash
     max_tokens: int = 16000
     max_tool_calls: int = 8          # tool-runner iterations per /ask
     daily_ask_limit: int = 30
     weekly_report: bool = True
     weekly_report_cron: str = "MON 00:15"   # UTC
-    api_key: str = ""                # empty → ANTHROPIC_API_KEY from the environment
+    api_key: str = ""                # empty → GEMINI_API_KEY or ANTHROPIC_API_KEY from the environment
 
 
 class WebCfg(BaseModel):

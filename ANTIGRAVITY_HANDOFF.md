@@ -1,201 +1,96 @@
-# ANTIGRAVITY_HANDOFF.md — Break Signal
+# ANTIGRAVITY_HANDOFF.md — Trading Journal
 
-**Last Updated:** 2026-09-07
-**Workspace:** `Break_Signal`
-**Tech Stack:** Python 3.11+ (asyncio, numpy, pandas, aiohttp, websockets, pydantic, mplfinance) · Pine Script v6 · SQLite (WAL) · Docker (ARM64 / Raspberry Pi 5)
-
----
-
-## Status — the `data/` layer is written and verified (2026-09-07)
-
-The `src/break_signal/data/` package (previously missing, which broke every
-runtime path) has been written and smoke-tested against live OKX data:
-
-- 20 core tests pass.
-- REST backfill returns 500 clean SOL-USDT-SWAP 1D candles (oldest-first, no NaNs).
-- `backtest/replay.py` runs end to end → 12 signals over 500 real candles.
-
-- WebSocket verified live too: `okx_ws.stream_closed_candles` on `candle1m`
-  yielded a confirmed candle in ~13s.
-
-All committed as `3590c43` (local, not pushed), along with a `.gitignore` fix
-(see below). **Not yet exercised live:** only the notify layer (Telegram/Discord)
-— no live break alert has fired, and it needs real secrets. That is the last M5 piece.
-
-**Root cause of the earlier missing package:** `.gitignore` had an unanchored
-`data/` rule (for the Docker state volume) that also matched `src/break_signal/data/`,
-so Session 2's source package was silently never committed. Now anchored to `/data/`.
+**Last Updated:** 2026-09-23
+**Workspace:** `G:\7Days\Trading_Journal`
+**Repo:** https://github.com/embrizo/Trading_Journal (`main`) — old `Break_Signal` remote is archived
+**Tech Stack:** Python 3.11+ (asyncio, numpy, pandas, aiohttp, websockets, pydantic, mcp) · Pine Script v6 · SQLite (WAL) · Docker (ARM64 / Raspberry Pi 5) · TradingView Lightweight Charts
 
 ---
 
-## 1. Project Goal & Overview
+## Status: Journal + AI Coach Built (J0–J6), 4 Real Positions Logged (2026-09-23)
 
-Automated support/resistance **trendline detection and breakout alerting** for
-`OKX:SOLUSDT.P` perpetual futures on the 1D and 4H timeframes. No manual line
-drawing: fractal pivots feed pairwise candidate lines, a close-through validity
-filter discards broken ones, a touch/span/recency score keeps the best few per
-side, and a confirmed close through a line (by an ATR buffer, with volume + body
-filters) fires an alert to Telegram and Discord with a rendered chart image.
+Everything in [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md) §5 (J0–J6) is implemented and unit-tested (**236 unit tests pass, 3 live Anthropic-evals skipped**).
+The three front-ends (CLI, Claude Code MCP server, Telegram bot) share one `Tools` surface in `src/break_signal/journal/tools.py`.
+`analytics.py` is the single source of truth where metrics and numbers are computed.
 
-**It never trades** — public OKX market data only, no API keys, no orders. Built
-to run 24/7 on a Raspberry Pi 5. Full specification lives in
-[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
-
-Three phases: **Phase 1** TradingView Pine indicator (algorithm proven visually) →
-**Phase 2** Python watcher service (this repo's focus) → **Phase 3** optional web
-dashboard (not started).
+### Recent Session Updates (2026-09-23)
+- **First 4 real open positions logged** in `data/journal.db` (gitignored). Screenshots placed in `pic/` (gitignored).
+- **Three key fixes applied & tested:**
+  1. `analytics.r_multiple`: Prevents negative risk when stops are trailed past entry (`risk <= 0 -> None`) to stop winning trades from inverting into huge negative R (LOSS). `sl_price` stores initial stop; trailing moves are stored as `sl_moved` events.
+  2. `db.update_trade`: Automatically computes `risk_pct` from `risk_amount` when `account_size` is configured.
+  3. `tools.update_trade`: Re-runs `rules.check` and `record_violations` on trade updates so rule breaches/clears are always persisted.
+- **`.gitignore` fixed**: inline comment on `pic/` separated so git properly ignores exchange screenshots.
 
 ---
 
-## 2. Architecture & Key Components
+## 1. Project Overview & Architecture
 
-Two implementations of one algorithm, kept in parity:
+### A. Break Signal Engine (Trendline & Breakout Detection)
+- Automated support/resistance detection on `OKX:SOLUSDT.P` (1D and 4H timeframes).
+- Multi-scale fractal pivots (coarse + fine `pivot_len_fine=3`).
+- Validity filter walks to `last_bar - 1` (Pine parity).
+- Confirmed close breakout filter (ATR buffer, volume, body ratio).
+- Read-only public market data (no exchange keys, never places orders).
 
-- **Phase 1 — Pine indicator** (`pine/break_signal.pine`, Pine v6): the whole
-  algorithm in one file — pivots, candidate lines, validity filter, scoring,
-  strict break test, JSON `alert()` payload, info table, ghost lines for broken
-  trendlines. Complete; not yet visually verified on TradingView by the user.
-
-- **Phase 2 — Python service** (`src/break_signal/`):
-  - **Multi-scale pivots (Session 4, IMPLEMENTATION_PLAN.md §11):** detection
-    merges a coarse and a fine (`pivot_len_fine=3`) fractal scale so consolidation
-    trendlines across minor swings are caught, not just strong pivots. Toggle
-    `use_fine_pivots` (default ON). Mirrored in Pine (`useFine`/`pivotFine`/`mergeP`)
-    and Python (`pivots.merge_pivots`, `engine._pivot_bars`). Verified live: fine
-    OFF = 12 signals (unchanged), fine ON = 14. Pine not yet compiled on TradingView.
-  - **`core/`** (pure algorithm, no I/O, fully tested): `indicators.py`
-    (Pine-matching RMA/ATR/RSI/SMA), `pivots.py`, `trendline.py`
-    (build/validate/score), `breakout.py` (break test + volume/body filters),
-    `engine.py` (per-bar orchestration), `state.py` (SQLite/WAL alert dedupe),
-    `params.py` + `types.py` (config dataclasses, `Candle`/`Trendline` models).
-  - **`data/`** — written 2026-09-07: `okx_rest.py` (paged candle backfill via
-    `/candles` + `/history-candles`, confirmed bars only, reversed oldest-first),
-    `okx_ws.py` (live WebSocket stream on the business endpoint, text `ping`/`pong`
-    heartbeat, reconnect with backoff, yields only confirmed candles). Hosts
-    overridable via `OKX_REST_URL` / `OKX_WS_URL`. Both REST and WS verified live.
-  - **`notify/`**: `base.py` (Notifier protocol), `telegram.py` (sendPhoto +
-    caption), `discord.py` (multipart webhook). Channel failures are isolated.
-  - **`render/chart.py`**: mplfinance snapshot with the active lines drawn.
-  - **`backtest/replay.py`**: growing-window replay (no look-ahead) → CSV of signals.
-  - **`watcher.py`**: one async worker per (symbol, timeframe) — backfill, then
-    stream closed candles, re-run the engine, notify, persist state.
-  - **`__main__.py`**: entrypoint; loads `config.yaml`, launches watchers.
-  - **`config.py`**: pydantic settings model.
-
-**Data flow:** REST backfill (~500 candles) → compute pivots → build/validate/score
-lines → persist. Then on each **confirmed** WebSocket candle close: append, rebuild
-lines cheaply, test each active line for a break, and on a new break render a PNG
-and fan out to Telegram + Discord, marking the line broken in SQLite so it can't
-re-alert (survives restarts).
+### B. Trading Journal & AI Coach
+- **`src/break_signal/journal/`**:
+  - `db.py`: SQLite WAL mode with migration tracking (`_MIGRATIONS`, schema v3).
+  - `models.py`: Dataclasses for trades, events, tags, rules, memories, and signals.
+  - `parser.py`: One-line trade syntax (`SOL 4H long 231.5 sl 225 tp 245 #breakout`).
+  - `analytics.py`: ONLY place metrics are computed.
+  - `rules.py`: Direction-aware rule evaluation engine (`sl_widened`, `max risk %`, etc.).
+  - `similar.py`: Deterministic nearest-neighbor trade ranking.
+  - `tools.py`: Shared unified `Tools` interface for CLI, MCP, and Telegram.
+  - `mcp_server.py`: FastMCP stdio server exposing 29 tools for AI assistants.
+  - `web.py` + `static/dashboard.html`: aiohttp dashboard with Lightweight Charts + webhook.
+  - `webhook.py`: TradingView alert receiver endpoint (`/pine/<secret>`).
+  - `backup.py` & `export.py`: Automated database snapshots and markdown/CSV/JSON exports.
+  - `coach.py`: AI coach integration (Anthropic currently; Gemini migration planned).
 
 ---
 
-## 3. Directory Layout & Key Files
+## 2. Key Architecture Invariants & Rules
 
-```
-Break_Signal/
-├── Claude_HANDOFF.md            # terser, Claude-focused handoff (sibling to this)
-├── ANTIGRAVITY_HANDOFF.md       # this file
-├── IMPLEMENTATION_PLAN.md       # full spec: algorithm, Pine, service, milestones
-├── README.md
-├── pyproject.toml               # break-signal v0.2.0, deps, pytest config
-├── requirements.txt
-├── config.example.yaml          # copy to config.yaml (gitignored) and fill secrets
-├── Dockerfile                   # python:3.11-slim-bookworm, piwheels for ARM
-├── docker-compose.yml
-├── .gitignore                   # excludes config.yaml, .env, state.db, artifacts
-├── pine/
-│   └── break_signal.pine        # Phase 1 indicator (Pine v6)
-├── src/break_signal/
-│   ├── __main__.py              # entrypoint / asyncio runner
-│   ├── config.py                # pydantic settings
-│   ├── watcher.py               # per-(symbol,tf) worker  [imports missing .data]
-│   ├── core/                    # pivots, trendline, breakout, engine, indicators,
-│   │                            #   state, params, types  (tested, working)
-│   ├── data/                    # okx_rest.py, okx_ws.py  (written 2026-09-07)
-│   ├── notify/                  # base, telegram, discord
-│   ├── render/                  # chart.py (mplfinance)
-│   └── backtest/
-│       └── replay.py            # offline replay -> CSV  [imports missing .data]
-└── tests/                       # conftest, helpers, test_indicators/pivots/
-                                 #   trendline/breakout  (20 tests, all pass)
-```
+1. **`journal/analytics.py` is the only source of truth for numbers**: Never compute R, PnL, win-rates, or drawdown anywhere else.
+2. **`sl_price` is the initial stop**: Never overwrite `sl_price` with a trailing stop. Record trailing moves as `sl_moved` events.
+3. **All front-end writes go through `journal/tools.py`**: Ensures rules, migrations, auto-linking, and validation are enforced.
+4. **Pine ↔ Python parity**: `trendline._build_side` stops at `last_bar - 1`. Parity in pivots (`use_fine_pivots`, `pivot_len_fine=3`).
+5. **No secret or private data in git**: `config.yaml`, `.env`, `data/journal.db`, and `pic/` must remain gitignored.
+6. **Gemini backend migration**: The coach's LLM interface in `journal/coach.py` is slated to support/switch to Google Gemini API.
 
 ---
 
-## 4. Key Execution & Verification Commands
+## 3. Quick Run & Verification Commands
 
 ```bash
-# --- Verify (works today) ---
-python -m pytest tests/ -q          # 20 core tests; needs only numpy + pytest
+# Run all unit tests
+python -m pytest tests/ -q
 
-# --- Install full service deps ---
-pip install -r requirements.txt     # aiohttp, websockets, numpy, pandas,
-                                     # mplfinance, matplotlib, pydantic, PyYAML
+# Journal CLI operations
+python -m break_signal.journal stats
+python -m break_signal.journal memories list
+python -m break_signal.journal backup
+python -m break_signal.journal report --dry-run
 
-# --- Backtest (works — no secrets needed) ---
-python -m break_signal.backtest.replay --symbol SOL-USDT-SWAP --tf 1D --limit 500 --out signals.csv
+# Start full service (watchers + dashboard + webhook)
+python -m break_signal -c config.yaml   # dashboard at http://127.0.0.1:8787/
 
-# --- Run service (imports OK; needs config.yaml with real secrets, WS not yet live-tested) ---
-cp config.example.yaml config.yaml  # then add Telegram token + chat_id + Discord webhook
-python -m break_signal -c config.yaml
-
-# --- Deploy on Raspberry Pi 5 ---
+# Docker build (Pi 5)
 docker compose up -d --build
-docker compose logs -f
 ```
 
 ---
 
-## 5. Current State & Known Invariants
+## 4. Prioritized Next Steps
 
-- **Completed / working:** Pine indicator (`pine/break_signal.pine`); Python
-  `core/` algorithm with 20 passing tests; `data/` REST + WS layer (REST verified
-  live); `backtest/replay.py` runs end to end on real OKX data; `notify/`, `render/`,
-  Docker + config scaffolding. Repo: https://github.com/embrizo/Break_Signal, `main`.
-- **Remaining:** the notify path (M5) has not fired a real alert yet (needs
-  secrets); the M6 multi-symbol hit-rate *report* is not produced; deploy (M7) not
-  done. All source is committed as `3590c43` (local, not pushed to GitHub).
-- **Invariants (a change can silently break these):**
-  - **Pine ↔ Python parity.** Both must produce the same signals on the same
-    candles. The subtle rule: the Python validity walk in `trendline._build_side`
-    runs to `last_bar - 1`, not `last_bar`, so the current close is tested as a
-    *break* against persisted lines rather than invalidating them first. If the
-    two implementations ever disagree on a break bar, check this first.
-  - **Only act on confirmed candles.** OKX returns candles newest-first and flags
-    the last array element `"1"` when the bar is closed. Reverse the array; never
-    alert intrabar (the #1 source of false signals).
-  - **Line id = `f"{side}:{ts_a}:{ts_b}"`** keyed on pivot open-time in ms (not bar
-    index) — stable across restarts so SQLite dedupe holds.
-  - **Alert dedupe** keyed by `(symbol, timeframe, line_id)`; a broken line never
-    re-alerts, even after a service restart.
-  - **No exchange API keys, ever.** Public market data only; the service must never
-    place an order.
-  - **Channel isolation.** Discord failing must not block Telegram, and vice versa.
-- **Known quirks / blockers:**
-  - `IMPLEMENTATION_PLAN.md` §4 still describes **Binance** in places; the locked
-    decision (§8) is **OKX** — OKX is authoritative.
-  - Pine indicator not yet loaded/tuned on TradingView by the user (M2/M3 pending);
-    whatever tuning wins must be copied into `config.example.yaml` `params:`.
-  - This dev machine (`C:\Users\Pattapon\...`) is new to the project; full-service
-    dependency install is unverified here.
-
----
-
-## 6. Next Steps
-
-- [ ] **Task 1 — go live (M5):** create `config.yaml` with real Telegram + Discord
-      secrets; run the watcher and confirm a real break alerts on both channels
-      (validates notify + render end to end — the only M5 piece left; REST + WS data
-      paths already verified live).
-- [ ] **Task 2 — TradingView verification (user):** load `pine/break_signal.pine`,
-      confirm auto lines match the reference screenshot, tune `pivotLen`/`atrBreak`,
-      then mirror the tuning into `config.example.yaml`.
-- [ ] **Task 3 — deploy to Pi 5:** `docker compose up -d --build`; put the state dir
-      on an SSD/USB, not the SD card.
-- [ ] **Task 4 — backtest report (M6):** extend `replay.py` into a hit-rate summary
-      over ~12 months across SOL + BTC + ETH to check the strict defaults aren't
-      overfit to SOL.
-- [ ] **Task 5 (optional) — Phase 3 dashboard:** FastAPI + TradingView Lightweight
-      Charts.
-- [ ] **Housekeeping — push `main`:** commit `3590c43` is local-only.
+1. **AI Coach Gemini API Integration**:
+   - Transition `journal/coach.py` to support Google Gemini API (or configurable Anthropic/Gemini).
+   - Seams identified: `AsyncAnthropic` client, tool calling runner, structured output for `Review`, screenshot/image analysis.
+2. **CLI `update` command**:
+   - Add CLI support for `update_trade` (currently available only on `Tools` / MCP).
+3. **Live Verification**:
+   - TradingView Pine indicator verification and parameter tuning (`pivotLen`, `atrBreak`).
+   - Telegram Bot live smoke test with real bot token and allowed chat ID.
+   - Raspberry Pi 5 Docker deployment.
+4. **M6 Multi-Symbol Backtest Report**:
+   - Extend `replay.py` across SOL, BTC, ETH to verify default parameters.

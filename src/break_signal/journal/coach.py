@@ -51,17 +51,36 @@ class CoachError(RuntimeError):
 
 
 def _friendly(e: Exception) -> CoachError:
-    import anthropic
-    if isinstance(e, TypeError) and "authentication" in str(e).lower():
-        return CoachError("no Anthropic credentials — set ANTHROPIC_API_KEY (or ai.api_key in config.yaml)")
-    if isinstance(e, anthropic.AuthenticationError):
-        return CoachError("Anthropic API key rejected (401) — check ANTHROPIC_API_KEY / ai.api_key")
-    if isinstance(e, anthropic.RateLimitError):
-        return CoachError("Anthropic rate limit hit (429) — try again in a minute")
-    if isinstance(e, anthropic.APIConnectionError):
-        return CoachError(f"cannot reach the Anthropic API: {e}")
-    if isinstance(e, anthropic.APIStatusError):
-        return CoachError(f"Anthropic API error {e.status_code}: {e.message}")
+    msg_str = str(e).lower()
+    try:
+        from google.genai import errors as g_errors
+        if isinstance(e, g_errors.ClientError):
+            if "401" in str(e) or "api_key_invalid" in msg_str:
+                return CoachError("Gemini API key rejected — check GEMINI_API_KEY / ai.api_key in config.yaml")
+            if "429" in str(e) or "resource_exhausted" in msg_str:
+                return CoachError("Gemini rate limit / quota hit (429) — try again later")
+            if "404" in str(e):
+                return CoachError(f"Gemini model not found: {e}")
+            return CoachError(f"Gemini client error: {e}")
+        if isinstance(e, g_errors.APIError):
+            return CoachError(f"Gemini API error: {e}")
+    except ImportError:
+        pass
+
+    try:
+        import anthropic
+        if isinstance(e, TypeError) and "authentication" in msg_str:
+            return CoachError("no Anthropic credentials — set ANTHROPIC_API_KEY (or ai.api_key in config.yaml)")
+        if isinstance(e, anthropic.AuthenticationError):
+            return CoachError("Anthropic API key rejected (401) — check ANTHROPIC_API_KEY / ai.api_key")
+        if isinstance(e, anthropic.RateLimitError):
+            return CoachError("Anthropic rate limit hit (429) — try again in a minute")
+        if isinstance(e, anthropic.APIConnectionError):
+            return CoachError(f"cannot reach the Anthropic API: {e}")
+        if isinstance(e, anthropic.APIStatusError):
+            return CoachError(f"Anthropic API error {e.status_code}: {e.message}")
+    except ImportError:
+        pass
     return CoachError(f"coach failed: {e.__class__.__name__}: {e}")
 
 
@@ -124,13 +143,45 @@ class Coach:
         self._client = client          # injected in tests; built lazily otherwise
         self._calls: list[ToolCall] = []
         if client is None:
-            import anthropic  # noqa: F401 — fail at construction, not on the first /ask
+            if self.is_gemini:
+                try:
+                    from google import genai  # noqa: F401
+                except ImportError as e:
+                    raise ImportError("google-genai is required for Gemini AI coach (pip install google-genai)") from e
+            else:
+                try:
+                    import anthropic  # noqa: F401
+                except ImportError as e:
+                    raise ImportError("anthropic is required for Claude AI coach (pip install anthropic)") from e
+
+    @property
+    def is_gemini(self) -> bool:
+        if getattr(self.cfg, "provider", "auto") == "gemini":
+            return True
+        if getattr(self.cfg, "provider", "auto") == "anthropic":
+            return False
+        if self._client is not None and (hasattr(self._client, "beta") or hasattr(self._client, "messages")):
+            return False
+        if "gemini" in (self.cfg.model or "").lower():
+            return True
+        import os
+        if os.environ.get("GEMINI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
+            return True
+        return False
 
     @property
     def client(self):
         if self._client is None:
-            import anthropic
-            self._client = anthropic.AsyncAnthropic(api_key=self.cfg.api_key or None)
+            if self.is_gemini:
+                import os
+                from google import genai
+                key = self.cfg.api_key or os.environ.get("GEMINI_API_KEY")
+                self._client = genai.Client(api_key=key or None)
+            else:
+                import os
+                import anthropic
+                key = self.cfg.api_key or os.environ.get("ANTHROPIC_API_KEY")
+                self._client = anthropic.AsyncAnthropic(api_key=key or None)
         return self._client
 
     # ── read-only tool surface for the tool runner ──────────────────────
@@ -139,7 +190,9 @@ class Coach:
         return json.dumps(result, ensure_ascii=False)
 
     def build_tools(self) -> list:
-        """``@beta_async_tool`` wrappers over the READ-ONLY ``Tools`` methods."""
+        """Read-only tool wrappers over the ``Tools`` methods."""
+        if self.is_gemini:
+            return self._build_gemini_tools()
         from anthropic import beta_async_tool
         T = self.tools
         rec = self._record
@@ -299,6 +352,154 @@ class Coach:
                 journal_get_trade, journal_recent_signals, journal_rule_check, journal_list_rules,
                 journal_memories]
 
+    def _build_gemini_tools(self) -> list:
+        """Python functions with docstrings and type annotations for Gemini function calling."""
+        T = self.tools
+        rec = self._record
+
+        async def market_snapshot(symbol: str, tf: str, bars: int = 300) -> str:
+            """FACT (live OKX candles) + CALC (engine): price, ATR, RSI, volume ratio, active
+            support/resistance lines with distance in ATR and %, nearest levels, last-bar signal.
+
+            Args:
+                symbol: Instrument, alias OK (SOL -> SOL-USDT-SWAP).
+                tf: Timeframe: 1D, 4H, 1H ...
+                bars: Candles to load (default 300).
+            """
+            return rec("market_snapshot", {"symbol": symbol, "tf": tf, "bars": bars},
+                       await T.market_snapshot(symbol, tf, bars))
+
+        async def journal_stats(period: str = "all", symbol: str | None = None, tf: str | None = None,
+                                direction: str | None = None, tags: list[str] | None = None) -> str:
+            """CALC: win_rate, profit_factor, avg_r (expectancy), max_drawdown_r, streaks over
+            CLOSED trades matching the filters. Every figure comes with n.
+
+            Args:
+                period: 30d, 12w, 6m, 1y or all.
+                symbol: Instrument filter.
+                tf: Timeframe filter.
+                direction: LONG or SHORT.
+                tags: All of these tags must be present.
+            """
+            args = dict(period=period, symbol=symbol, tf=tf, direction=direction, tags=tags)
+            return rec("journal_stats", args, T.stats(period, symbol, tf, direction, tags))
+
+        async def journal_tag_stats(period: str = "all", phase: str | None = None) -> str:
+            """CALC: per-tag n / wins / losses / win_rate / avg_r / profit_factor.
+
+            Args:
+                period: 30d, 6m, 1y or all.
+                phase: ENTRY, EXIT or omitted for both.
+            """
+            return rec("journal_tag_stats", {"period": period, "phase": phase}, T.tag_stats(period, phase))
+
+        async def journal_feature_stats(period: str = "all") -> str:
+            """CALC: performance by tf, direction, session, RSI band, ATR band, signal side/event.
+
+            Args:
+                period: 30d, 6m, 1y or all.
+            """
+            return rec("journal_feature_stats", {"period": period}, T.feature_stats(period))
+
+        async def journal_signal_history(tf: str, event: str, side: str | None = None,
+                                         symbol: str | None = None) -> str:
+            """CALC: the trader's record on this kind of alert (tf + break_up/break_down) with
+            best/worst entry tag and matched trade ids.
+
+            Args:
+                tf: Timeframe of the alert.
+                event: break_up (traded LONG) or break_down (traded SHORT).
+                side: resistance or support; inferred from event if omitted.
+                symbol: Narrow to one instrument.
+            """
+            args = dict(tf=tf, event=event, side=side, symbol=symbol)
+            return rec("journal_signal_history", args, T.signal_history(tf, event, side, symbol))
+
+        async def journal_similar_trades(symbol: str, direction: str, tf: str | None = None,
+                                         side: str | None = None, tags: list[str] | None = None,
+                                         rsi: float | None = None, atr_dist: float | None = None,
+                                         k: int = 8) -> str:
+            """CALC: the k past trades most similar to a proposed setup (deterministic feature
+            match) with outcomes, reasons and an aggregate.
+
+            Args:
+                symbol: Instrument.
+                direction: LONG or SHORT.
+                tf: Timeframe.
+                side: resistance or support.
+                tags: Setup tags of the proposed trade.
+                rsi: RSI at the proposed entry.
+                atr_dist: Break distance from the line in ATR.
+                k: How many matches to return.
+            """
+            args = dict(symbol=symbol, direction=direction, tf=tf, side=side, tags=tags, rsi=rsi,
+                        atr_dist=atr_dist, k=k)
+            return rec("journal_similar_trades", args,
+                       T.similar_trades(symbol, direction, tf, side, None, tags, rsi, atr_dist, k))
+
+        async def journal_search_trades(symbol: str | None = None, tf: str | None = None,
+                                        direction: str | None = None, status: str | None = None,
+                                        outcome: str | None = None, tags: list[str] | None = None,
+                                        period: str | None = None, limit: int = 20) -> str:
+            """FACT: trades matching the filters, newest first.
+
+            Args:
+                symbol: Instrument filter.
+                tf: Timeframe filter.
+                direction: LONG or SHORT.
+                status: OPEN, CLOSED or SKIPPED.
+                outcome: WIN, LOSS or BE.
+                tags: All of these tags must be present.
+                period: 30d, 6m, 1y or all.
+                limit: Max rows.
+            """
+            args = dict(symbol=symbol, tf=tf, direction=direction, status=status, outcome=outcome,
+                        tags=tags, period=period, limit=limit)
+            return rec("journal_search_trades", args,
+                       T.search_trades(symbol, tf, direction, status, outcome, tags, period, None, limit))
+
+        async def journal_get_trade(trade_id: int) -> str:
+            """FACT: one trade in full — plan, outcome, reasons, tags, events, linked signal, violations.
+
+            Args:
+                trade_id: The trade id.
+            """
+            return rec("journal_get_trade", {"trade_id": trade_id}, T.get_trade(trade_id))
+
+        async def journal_recent_signals(symbol: str | None = None, tf: str | None = None,
+                                         limit: int = 10) -> str:
+            """FACT: breakout alerts stored by the watcher, newest first.
+
+            Args:
+                symbol: Instrument filter.
+                tf: Timeframe filter.
+                limit: Max rows.
+            """
+            return rec("journal_recent_signals", {"symbol": symbol, "tf": tf, "limit": limit},
+                       T.recent_signals(symbol, tf, None, limit))
+
+        async def journal_rule_check(proposed: dict) -> str:
+            """CALC: which of the trader's rules a proposed trade would violate.
+
+            Args:
+                proposed: Keys symbol, direction, tf, entry_price, sl_price, tp_price, risk_pct, tags, ctx_rsi.
+            """
+            return rec("journal_rule_check", {"proposed": proposed}, T.rule_check(proposed))
+
+        async def journal_list_rules() -> str:
+            """FACT: the trader's structured rules."""
+            return rec("journal_list_rules", {}, T.list_rules())
+
+        async def journal_memories() -> str:
+            """FACT: evidence-backed coach memories — patterns with n >= 5, rules broken 3+ times,
+            and notes the trader confirmed — each with trade ids and period."""
+            return rec("journal_memories", {}, T.memories())
+
+        return [market_snapshot, journal_stats, journal_tag_stats, journal_feature_stats,
+                journal_signal_history, journal_similar_trades, journal_search_trades,
+                journal_get_trade, journal_recent_signals, journal_rule_check, journal_list_rules,
+                journal_memories]
+
     # ── budget ──────────────────────────────────────────────────────────
     def asks_today(self) -> int:
         start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -320,6 +521,8 @@ class Coach:
     # ── /ask ────────────────────────────────────────────────────────────
     async def ask(self, question: str, signal: dict | None = None, store: bool = True) -> CoachAnswer:
         """Answer a trader's question with the read-only tools; stores the answer."""
+        if self.is_gemini:
+            return await self._ask_gemini(question, signal=signal, store=store)
         if self.asks_today() >= self.cfg.daily_ask_limit:
             raise AskBudgetExceeded(f"daily /ask limit ({self.cfg.daily_ask_limit}) reached")
         self._calls = []
@@ -355,6 +558,42 @@ class Coach:
                 text)
         return ans
 
+    async def _ask_gemini(self, question: str, signal: dict | None = None, store: bool = True) -> CoachAnswer:
+        if self.asks_today() >= self.cfg.daily_ask_limit:
+            raise AskBudgetExceeded(f"daily /ask limit ({self.cfg.daily_ask_limit}) reached")
+        self._calls = []
+        user = question if signal is None else \
+            f"{question}\n\nCURRENT SIGNAL:\n{json.dumps(signal, ensure_ascii=False)}"
+        try:
+            tools = self._build_gemini_tools()
+            chat = self.client.aio.chats.create(
+                model=self.cfg.model,
+                config={
+                    "tools": tools,
+                    "system_instruction": prompts.COACH_V1,
+                }
+            )
+            resp = await chat.send_message(user)
+        except (AskBudgetExceeded, CoachError):
+            raise
+        except Exception as e:
+            raise _friendly(e) from e
+
+        text = resp.text.strip() if resp.text else ""
+        usage = _usage_gemini(resp)
+        ans = CoachAnswer(text=text, tool_calls=list(self._calls), model=self.cfg.model,
+                          prompt_version=prompts.COACH_VERSION, usage=usage,
+                          stop_reason=None)
+        ans.unverified_numbers = parity_check(text, ans.tool_calls)
+        if store:
+            ans.analysis_id = self._store(
+                "suggestion", None, self.cfg.model, prompts.COACH_VERSION,
+                {"question": question, "signal": signal, "usage": usage,
+                 "tool_calls": [{"name": c.name, "args": c.args, "result": c.result} for c in ans.tool_calls],
+                 "unverified_numbers": ans.unverified_numbers},
+                text)
+        return ans
+
     # ── /review ─────────────────────────────────────────────────────────
     async def review(self, trade_id: int, store: bool = True, with_images: bool = True) -> dict:
         """Structured post-trade review from the pre-assembled review context.
@@ -363,6 +602,8 @@ class Coach:
         are attached as image blocks; whatever the model reads off a chart comes
         back in ``chart_observations`` and is stored separately as
         ``ai_analysis.kind='vision'`` — an observation, never a fact."""
+        if self.is_gemini:
+            return await self._review_gemini(trade_id, store=store, with_images=with_images)
         from pydantic import BaseModel
 
         class Review(BaseModel):
@@ -416,11 +657,74 @@ class Coach:
                     json.dumps(out["chart_observations"], ensure_ascii=False))
         return out
 
+    async def _review_gemini(self, trade_id: int, store: bool = True, with_images: bool = True) -> dict:
+        from pydantic import BaseModel
+        from google.genai import types
+
+        class Review(BaseModel):
+            facts: list[str]
+            metrics: list[str]
+            rule_violations: list[str]
+            observations: list[str]
+            chart_observations: list[str]
+            questions: list[str]
+
+        ctx = self.tools.review_context(trade_id)
+        if "error" in ctx:
+            return ctx
+        images, skipped = ([], []) if not with_images else load_screenshots(ctx["trade"].get("screenshots", []))
+        contents: list[Any] = []
+        for img in images:
+            import base64
+            contents.append(f"Chart screenshot — {img['phase']} ({img['name']}):")
+            raw_data = base64.b64decode(img["data"])
+            contents.append(types.Part.from_bytes(data=raw_data, mime_type=img["media_type"]))
+        contents.append("REVIEW CONTEXT (JSON):\n" + json.dumps(ctx, ensure_ascii=False))
+        system = prompts.REVIEW_V1 + (("\n\n" + prompts.REVIEW_VISION_ADDENDUM) if images else
+                                      "\n\nNo chart screenshots were provided; leave chart_observations empty.")
+        try:
+            resp = await self.client.aio.models.generate_content(
+                model=self.cfg.model,
+                contents=contents,
+                config={
+                    "system_instruction": system,
+                    "response_mime_type": "application/json",
+                    "response_schema": Review,
+                }
+            )
+        except Exception as e:
+            raise _friendly(e) from e
+
+        try:
+            parsed = Review.model_validate_json(resp.text)
+            out = parsed.model_dump()
+        except Exception:
+            out = {"error": "failed to parse structured review"}
+
+        out["trade_id"] = trade_id
+        out["model"] = self.cfg.model
+        out["prompt_version"] = prompts.REVIEW_VERSION
+        out["images_used"] = [i["name"] for i in images]
+        out["images_skipped"] = skipped
+        out["unverified_numbers"] = parity_check(
+            " ".join(sum((out.get(k, []) for k in ("facts", "metrics", "observations")), [])),
+            [ToolCall("journal_review_context", {"trade_id": trade_id}, ctx)])
+        if store and "error" not in out:
+            out["analysis_id"] = self._store("review", trade_id, self.cfg.model, prompts.REVIEW_VERSION,
+                                             ctx, json.dumps(out, ensure_ascii=False))
+            if images and out.get("chart_observations"):
+                out["vision_analysis_id"] = self._store(
+                    "vision", trade_id, self.cfg.model, prompts.REVIEW_VERSION,
+                    {"images": out["images_used"], "label": "observation"},
+                    json.dumps(out["chart_observations"], ensure_ascii=False))
+        return out
 
     # ── narrative (weekly / monthly report) ─────────────────────────────
     async def narrative(self, system: str, payload: dict, max_tokens: int = 4000) -> tuple[str, list[str]]:
         """One tool-less call: turn a deterministic metrics block into prose.
         Returns (text, unverified_numbers)."""
+        if self.is_gemini:
+            return await self._narrative_gemini(system, payload, max_tokens=max_tokens)
         try:
             resp = await self.client.messages.create(
                 model=self.cfg.model,
@@ -432,6 +736,21 @@ class Coach:
         except Exception as e:  # noqa: BLE001
             raise _friendly(e) from e
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        return text, parity_check(text, [ToolCall("metrics", {}, payload)])
+
+    async def _narrative_gemini(self, system: str, payload: dict, max_tokens: int = 4000) -> tuple[str, list[str]]:
+        try:
+            resp = await self.client.aio.models.generate_content(
+                model=self.cfg.model,
+                contents=["METRICS (JSON):\n" + json.dumps(payload, ensure_ascii=False)],
+                config={
+                    "system_instruction": system,
+                    "max_output_tokens": max_tokens,
+                }
+            )
+        except Exception as e:
+            raise _friendly(e) from e
+        text = (resp.text or "").strip()
         return text, parity_check(text, [ToolCall("metrics", {}, payload)])
 
 
@@ -476,6 +795,17 @@ def _usage(msg: Any) -> dict:
         return {}
     keys = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
     return {k: getattr(u, k, None) for k in keys if getattr(u, k, None) is not None}
+
+
+def _usage_gemini(resp: Any) -> dict:
+    meta = getattr(resp, "usage_metadata", None)
+    if not meta:
+        return {}
+    return {
+        "input_tokens": getattr(meta, "prompt_token_count", None),
+        "output_tokens": getattr(meta, "candidates_token_count", None),
+        "total_tokens": getattr(meta, "total_token_count", None),
+    }
 
 
 def format_review(r: dict) -> str:

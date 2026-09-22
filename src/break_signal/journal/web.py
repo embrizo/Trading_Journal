@@ -78,9 +78,18 @@ def _add_dashboard(app, cfg: "Config", db: JournalDB, tools: Tools) -> None:
                                 headers={"Cache-Control": "no-cache"})
 
     async def api_config(_req):
+        # Collect symbols already in the journal for the symbol picker suggestions
+        try:
+            db_syms = [r[0] for r in db.conn.execute(
+                "SELECT DISTINCT symbol FROM trades "
+                "UNION SELECT DISTINCT symbol FROM signals"
+            ).fetchall()]
+        except Exception:
+            db_syms = []
         return respond({
             "watches": [{"symbol": w.symbol, "tf": w.timeframe} for w in cfg.watches],
             "aliases": cfg.journal.symbol_aliases,
+            "db_symbols": db_syms,
             "writes": bool(cfg.web.write_token),   # the page hides its command bar without this
             "help": HELP,
         })

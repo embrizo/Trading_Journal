@@ -76,14 +76,15 @@ def build_coach(cfg, tools, log):
     """The AI coach when ai.enabled, a key is available and the SDK is installed; else None."""
     if not cfg.ai.enabled:
         return None
-    if not (cfg.ai.api_key or os.environ.get("ANTHROPIC_API_KEY")):
-        log.warning("ai.enabled but no API key (ai.api_key or ANTHROPIC_API_KEY) — /ask and report notes disabled")
+    key = cfg.ai.api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        log.warning("ai.enabled but no API key (ai.api_key or GEMINI_API_KEY / ANTHROPIC_API_KEY) — /ask and report notes disabled")
         return None
     try:
         from .journal.coach import Coach
         coach = Coach(tools, cfg.ai)
-    except ImportError:
-        log.warning("ai.enabled but the anthropic package is missing (pip install -e .[ai])")
+    except ImportError as e:
+        log.warning("ai.enabled but AI SDK missing: %s", e)
         return None
     log.info("AI coach: %s", cfg.ai.model)
     return coach
