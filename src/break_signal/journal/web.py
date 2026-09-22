@@ -70,7 +70,12 @@ def _add_dashboard(app, cfg: "Config", db: JournalDB, tools: Tools) -> None:
         return web.json_response(json_safe(data), status=status)
 
     async def index(_req):
-        return web.FileResponse(STATIC / "dashboard.html")
+        # The page is small and changes with every release, so let the browser
+        # revalidate instead of caching it: otherwise an updated dashboard keeps
+        # serving the old UI until someone thinks to hard-refresh. FileResponse
+        # still sets Last-Modified/ETag, so an unchanged page costs a 304.
+        return web.FileResponse(STATIC / "dashboard.html",
+                                headers={"Cache-Control": "no-cache"})
 
     async def api_config(_req):
         return respond({

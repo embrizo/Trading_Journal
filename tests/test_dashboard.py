@@ -41,6 +41,8 @@ def test_page_and_api(setup):
         async with TestClient(TestServer(app)) as c:
             r = await c.get("/")
             assert r.status == 200 and "Break Signal" in await r.text() and "lightweight-charts" in await r.text()
+            # the page must revalidate, or an updated dashboard keeps serving the old UI
+            assert "no-cache" in r.headers.get("Cache-Control", "")
             conf = await (await c.get("/api/config")).json()
             assert conf["watches"] == [{"symbol": "SOL-USDT-SWAP", "tf": "1D"}, {"symbol": "SOL-USDT-SWAP", "tf": "4H"}]
             raw = await (await c.get("/api/summary")).text()
