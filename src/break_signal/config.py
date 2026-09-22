@@ -66,7 +66,10 @@ class WebCfg(BaseModel):
     enabled: bool = False
     host: str = "0.0.0.0"
     port: int = 8787
-    dashboard: bool = True    # read-only dashboard at / (LAN only — no auth)
+    dashboard: bool = True    # dashboard at / (LAN only — reads need no auth)
+    write_token: str = ""     # set to enable /api/do (log/close/edit from the page).
+                              # Empty = the dashboard stays read-only. Sent as
+                              # X-Journal-Token; reads are unaffected either way.
 
 
 class WebhookCfg(BaseModel):

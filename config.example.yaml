@@ -79,7 +79,10 @@ web:
   enabled: false
   host: 0.0.0.0
   port: 8787
-  dashboard: true             # read-only dashboard at http://<pi>:8787/ — LAN only, no auth
+  dashboard: true             # dashboard at http://<pi>:8787/ — LAN only, reads need no auth
+  write_token: ""             # empty = read-only. Set a long random string to enable the
+                              # command bar (log/close/edit from the page); it is sent as
+                              # the X-Journal-Token header and checked on every write.
 
 # The Pine indicator's alert() JSON → journal signals (source=pine).
 # In TradingView: alert → Webhook URL = http://<pi>:8787/pine/<secret>. Needs a route in from

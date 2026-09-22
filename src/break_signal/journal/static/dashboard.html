@@ -33,6 +33,20 @@
   .scroll { max-height:260px; overflow:auto }
   .legend { display:flex; gap:14px; color:var(--muted); font-size:12px; margin-top:6px; flex-wrap:wrap }
   .legend i { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:5px }
+  /* command bar (only rendered when web.write_token is set) */
+  #cmdbar { display:none; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel) }
+  #cmdbar.on { display:block }
+  #cmdrow { display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+  #cmd { flex:1; min-width:240px; background:var(--bg); color:var(--fg); border:1px solid var(--line);
+         border-radius:6px; padding:8px 10px; font:inherit }
+  #cmd:focus { outline:none; border-color:var(--accent) }
+  #cmdout { margin-top:8px; font-size:13px; min-height:18px }
+  #cmdhelp { margin-top:8px; color:var(--muted); font-size:12px; white-space:pre-wrap; display:none }
+  #cmdhelp.on { display:block }
+  .btn-xs { padding:2px 7px; font-size:12px; border-radius:5px; background:var(--bg);
+            color:var(--muted); border:1px solid var(--line); cursor:pointer }
+  .btn-xs:hover { color:var(--fg); border-color:var(--accent) }
+  td.act { white-space:nowrap } td.act button { margin-right:4px }
 </style>
 </head>
 <body>
@@ -43,6 +57,17 @@
   <button id="reload">Reload</button>
   <span id="status" class="muted"></span>
 </header>
+<section id="cmdbar">
+  <div id="cmdrow">
+    <input id="cmd" autocomplete="off" spellcheck="false"
+           placeholder='add SOL 4H long 231.5 sl 225 #breakout -- clean retest     ·     close 2 1.35 hit TP     ·     sl 2 1.27'>
+    <button id="run">Run</button>
+    <button id="helpbtn" class="btn-xs" title="command syntax">?</button>
+    <button id="tokenbtn" class="btn-xs" title="change the write token">token</button>
+  </div>
+  <div id="cmdout"></div>
+  <div id="cmdhelp"></div>
+</section>
 <main>
   <div class="stack">
     <div class="panel">
@@ -127,33 +152,95 @@ function stats(el, s) {
     ['streak', `${s.streaks.current} ${s.streaks.current_kind || ''}`]];
   el.innerHTML = items.map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 }
-function tradeRow(t) {
+function tradeRow(t, actions = false) {
+  const act = actions && canWrite ? `<td class="act">
+    <button class="btn-xs" data-cmd="close ${t.id} ">close</button>
+    <button class="btn-xs" data-cmd="sl ${t.id} ">sl</button>
+    <button class="btn-xs" data-cmd="tag ${t.id} #">tag</button>
+    <button class="btn-xs" data-cmd="note ${t.id} ">note</button></td>` : '';
   return `<tr><td>#${t.id}</td><td>${t.status}</td><td>${esc(t.symbol)} ${esc(t.tf || '')}</td><td>${t.direction}</td>
     <td>${fmt(t.entry_price, 4)}</td><td>${fmt(t.sl_price, 4)}</td><td>${fmt(t.tp_price, 4)}</td><td>${fmt(t.exit_price, 4)}</td>
     <td>${t.outcome || ''}</td><td class="${cls(t.r_multiple)}">${t.r_multiple == null ? '' : fmt(t.r_multiple) + 'R'}</td>
     <td>${(t.entry_tags || []).concat(t.exit_tags || []).map(x => `<span class="tag">${esc(x)}</span>`).join('')}</td>
-    <td class="muted">${esc(t.opened || '')}</td></tr>`;
+    <td class="muted">${esc(t.opened || '')}</td>${act}</tr>`;
 }
 async function loadPanels() {
   const s = await j('/api/summary');
   stats($('#stats-all'), s.all_time); stats($('#stats-30'), s.last_30d);
   eqSeries.setData(s.equity_curve.map((p, i) => ({ time: i + 1, value: p.cum_r }))); eqChart.timeScale().fitContent();
-  $('#open').innerHTML = s.open_trades.length ? `<table>${s.open_trades.map(tradeRow).join('')}</table>` : '<div class="muted">none</div>';
+  $('#open').innerHTML = s.open_trades.length ? `<table>${s.open_trades.map(t => tradeRow(t, true)).join('')}</table>` : '<div class="muted">none</div>';
   const tags = Object.entries(s.tag_stats_entry);
   $('#tags').innerHTML = tags.length ? `<table><tr><th>tag</th><th>n</th><th>win</th><th>avg R</th></tr>${tags.map(([k, v]) =>
     `<tr><td>${esc(k)}</td><td>${v.n}</td><td>${pct(v.win_rate)}</td><td class="${cls(v.avg_r)}">${fmt(v.avg_r)}</td></tr>`).join('')}</table>` : '<div class="muted">none</div>';
   $('#memories').innerHTML = s.memories.length ? s.memories.map(m => `<div>${m.confirmed ? '✓' : '·'} <span class="muted">[${m.type}]</span> ${esc(m.content)}</div>`).join('')
     : '<div class="muted">nothing yet — appears at 5+ trades on a pattern or 3+ rule breaks</div>';
   const tr = await j('/api/trades?limit=30');
-  $('#trades').innerHTML = tr.trades.length ? `<table><tr><th>id</th><th>status</th><th>sym</th><th>dir</th><th>entry</th><th>sl</th><th>tp</th><th>exit</th><th>out</th><th>R</th><th>tags</th><th>opened</th></tr>${tr.trades.map(tradeRow).join('')}</table>` : '<div class="muted">no trades yet</div>';
+  $('#trades').innerHTML = tr.trades.length ? `<table><tr><th>id</th><th>status</th><th>sym</th><th>dir</th><th>entry</th><th>sl</th><th>tp</th><th>exit</th><th>out</th><th>R</th><th>tags</th><th>opened</th></tr>${tr.trades.map(t => tradeRow(t)).join('')}</table>` : '<div class="muted">no trades yet</div>';
   const sg = await j('/api/signals?limit=20');
   $('#signals').innerHTML = sg.length ? `<table><tr><th>id</th><th>src</th><th>sym</th><th>tf</th><th>event</th><th>price</th><th>rsi</th><th>candle</th></tr>${sg.map(x =>
     `<tr><td>#${x.id}</td><td>${x.source}</td><td>${esc(x.symbol)}</td><td>${x.tf}</td><td class="${x.event === 'break_up' ? 'pos' : 'neg'}">${x.event}</td><td>${fmt(x.price, 4)}</td><td>${fmt(x.rsi, 1)}</td><td class="muted">${x.candle}</td></tr>`).join('')}</table>` : '<div class="muted">none</div>';
 }
 
+// ── writing (only when the server has web.write_token) ──────────────────────
+let canWrite = false;
+// Per-viewer convenience only; the token never leaves this browser and the
+// server re-checks it on every call. Storage can throw in a private window.
+const store = {
+  get() { try { return localStorage.getItem('journal_token') || ''; } catch { return ''; } },
+  set(v) { try { localStorage.setItem('journal_token', v); } catch { /* not fatal */ } },
+};
+function say(msg, kind) {
+  $('#cmdout').innerHTML = msg ? `<span class="${kind || ''}">${esc(msg)}</span>` : '';
+}
+function askToken(why) {
+  const t = prompt(why || 'Write token (web.write_token in config.yaml):', store.get() || '');
+  if (t !== null) store.set(t.trim());
+  return store.get();
+}
+async function runCmd(cmd) {
+  if (!cmd.trim()) return;
+  let token = store.get() || askToken();
+  if (!token) return say('no token — writes are refused', 'err');
+  say('running…', 'muted');
+  const r = await fetch('/api/do', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Journal-Token': token },
+    body: JSON.stringify({ cmd }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 403) {
+    say('token rejected', 'err');
+    if (askToken('That token was rejected. Try again:')) runCmd(cmd);
+    return;
+  }
+  if (!r.ok) return say(d.error || `HTTP ${r.status}`, 'err');
+  const warn = (d.rule_violations || []).map(v => `⚠ ${v.name} (${v.detail})`).join('  ');
+  say(d.message + (warn ? '   ' + warn : ''), warn ? 'neg' : 'pos');
+  $('#cmd').value = '';
+  await Promise.all([loadPanels(), loadChart()]);
+}
+function wireWrites(cfg) {
+  canWrite = !!cfg.writes;
+  if (!canWrite) return;
+  $('#cmdbar').classList.add('on');
+  $('#cmdhelp').textContent = cfg.help || '';
+  $('#run').onclick = () => runCmd($('#cmd').value);
+  $('#cmd').addEventListener('keydown', e => { if (e.key === 'Enter') runCmd($('#cmd').value); });
+  $('#helpbtn').onclick = () => $('#cmdhelp').classList.toggle('on');
+  $('#tokenbtn').onclick = () => { if (askToken()) say('token saved in this browser', 'muted'); };
+  // the per-trade buttons prefill the box rather than acting, so nothing is
+  // written by a single mis-click
+  document.addEventListener('click', e => {
+    const b = e.target.closest('button[data-cmd]');
+    if (!b) return;
+    $('#cmd').value = b.dataset.cmd;
+    $('#cmd').focus();
+  });
+}
+
 // ── boot ────────────────────────────────────────────────────────────────────
 (async () => {
   const cfg = await j('/api/config');
+  wireWrites(cfg);
   const syms = [...new Set(cfg.watches.map(w => w.symbol))], tfs = [...new Set(cfg.watches.map(w => w.tf))];
   if (!syms.length) { syms.push('SOL-USDT-SWAP'); tfs.push('1D'); }
   $('#symbol').innerHTML = syms.map(s => `<option>${esc(s)}</option>`).join('');

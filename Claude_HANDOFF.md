@@ -13,7 +13,7 @@ that does real work.
 ## Status: journal + AI coach fully built (J0–J6), awaiting live checks and the Pi deploy (2026-09-20)
 
 Everything in [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md)
-§5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested (239 tests + 3
+§5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested (244 tests + 3
 key-gated live evals) and pushed.
 The three front-ends (CLI, Claude Code MCP, Telegram bot) share one `Tools` surface;
 `analytics.py` is the only place numbers are computed. What has NOT been exercised
@@ -83,7 +83,7 @@ Full spec: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — algorithm (§2
 ## Quick run commands
 
 ```bash
-# All tests — numpy + pytest (+ aiohttp/websockets/mcp/anthropic for the wiring tests); 239 pass, 3 live skipped
+# All tests — numpy + pytest (+ aiohttp/websockets/mcp/anthropic for the wiring tests); 244 pass, 3 live skipped
 python -m pytest tests/ -q
 ANTHROPIC_API_KEY=... python -m pytest tests/evals -q      # 3 live coach evals, cost money
 
@@ -158,6 +158,8 @@ URL will fail on push rather than diverge — repoint it with
 - **Third local run — end-to-end with a populated journal** (11 seeded trades on a scratch DB). Both fixes verified in situ: exactly 3 widening violations recorded from 5 `sl_moved` events (the 2 trailing ones excluded), and the derived rule memory cites only those three (`#1, #2, #3`). Memory derivation produced all 5 pattern memories + 2 rule memories with correct n/win-rate; the dashboard rendered them, PF 2.50 and an 11-point equity curve; `/api/summary` is strict JSON. Also drove the **MCP server over stdio** (29 tools): `journal_stats`, `journal_tag_stats`, `journal_memories`, `journal_rule_check` (a proposed FOMO trade breaks only "No FOMO entries"; "Never widen the stop" passes), `journal_similar_trades`, `journal_get_trade` — trade #1 (widened) carries the violation, #4 (trailed) does not, which is what the coach would see. Mobile check at 375 px: no page overflow; wide tables scroll inside `div.scroll`. Note for future driving of the MCP surface: `journal_rule_check` takes a `proposed` dict but `journal_similar_trades` takes flat args with `k` (not `limit`) — extras are silently ignored.
 - Added `tests/test_dashboard_lines.py` (9 tests) for the trendline segments the dashboard draws — see the J6 entry below.
 - User decision: **they will move the coach to the Gemini API themselves.** Don't build Anthropic-side work unasked; the seams are listed in Next steps #0.
+- **Dashboard can write now** (2026-09-23). The user opened the page and found nothing to click — J6 shipped it read-only, every route a GET. Added `POST /api/do {"cmd": "..."}`: the CLI's one-line syntax (`add` / `close` / `skip` / `event` / `sl` / `tag` / `note` / `help`) routed through `Tools`, so rule checks, auto-link and ctx copy behave as everywhere else, and `rule_violations` come back to the page. `sl <id> <price>` deliberately logs an `sl_moved` event (chaining `from` off the previous move) instead of touching `sl_price`, which is what keeps R measured against initial risk. Guarded by `web.write_token` (`X-Journal-Token`, `hmac.compare_digest`): unset → the route is not registered at all and the page hides its command bar, so the default install is unchanged. Per-open-trade buttons prefill the box rather than acting. 5 tests in `tests/test_dashboard_write.py`; driven for real in the browser (add → sl → close, stats updating live, 403 on a bad token). Caught while looking: `map(tradeRow)` passes the array index as the second argument, so every row after the first grew action buttons — always `map(t => tradeRow(t))`.
+- **WAL gotcha for scratch copies:** `data/journal.db` runs in WAL mode, so `Copy-Item journal.db` alone gives a stale file (it showed 0 trades). Use `journal backup --dir <scratch>` — it does a proper online snapshot and checkpoints to a single file.
 - **First real trades in `data/journal.db`** (2026-09-23): the user's 4 open exchange positions, logged from app screenshots — symbol, direction, entry, leverage, initial stop and the USDT risk they stated. No `position_size` (the screens give USDT notional, and `analytics.pnl_amount` multiplies size by the price move, so a notional there would be wrong); notional/margin/liq. price sit in each trade's `notes`. `journal.account_size` is set to their equity, so `risk_pct` is derived — all four breach "Max risk 1%" (5–15%), which produced the journal's first real memory. The DB is gitignored; `pic/` (exchange screenshots) is now gitignored too — **the repo is public**, so screenshots and journal data must never be committed.
 - **Three bugs found while logging those positions** (all fixed, tests added, 239 pass):
   1. **R inverted when the stop sits beyond entry.** The user trailed two stops past break-even. `r_multiple` only guarded `risk == 0`, so negative risk flipped the sign: a winning ZRO exit came out as **−30.6R → LOSS** (SUI −129R). Now `risk <= 0` → `None`, and the convention is explicit everywhere: **`sl_price` is the initial stop, trailing moves are `sl_moved` events**. `planned_rr` inherits the guard.

@@ -180,7 +180,27 @@ lopsided result, or a rule broken 3+ times — each with the trade ids behind it
 Set `web.enabled: true` and open `http://<pi>:8787/` on your LAN: live candles
 with the engine's trendlines drawn on them, ▲/▼ markers for stored alerts, ◆/■
 markers for your entries and exits, equity curve, stats, tags, memories, recent
-alerts. Read-only and unauthenticated — don't expose it to the internet.
+alerts. Reading needs no password — don't expose it to the internet.
+
+Set `web.write_token` to a long random string and the page also gets a command
+bar, so you can journal from the browser with the same one-line syntax as the CLI
+and the bot:
+
+```
+add SOL 4H long 231.5 sl 225 tp 245 #breakout #retest -- clean retest
+close 5 245 hit TP, held the plan #hit_tp
+sl 5 228                 # logs an sl_moved event; your initial stop is kept, so R stays honest
+event 5 partial_close size=0.5 price=240
+tag 5 exit #hit_tp       note 5 felt calm
+skip 11 not at desk
+```
+
+Each open trade also gets close / sl / tag / note buttons that *fill in* the box
+rather than firing, so a mis-click writes nothing. Commands go through the same
+`Tools` layer as everywhere else, so rule checks, auto-linking and alert context
+behave identically, and any rule you break comes back in the reply. Without the
+token every write is refused with 403, and with no token configured the route
+does not exist at all.
 
 The same server can receive the Pine indicator's alerts: set `webhook.enabled`
 and a long `webhook.secret`, point a TradingView alert's webhook URL at
