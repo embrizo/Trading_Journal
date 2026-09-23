@@ -1,7 +1,7 @@
 # Claude handoff — Break Signal
 
-**Last Updated:** 2026-09-23
-**Workspace:** `G:\7Days\Trading_Journal` (moved from `Break_Signal` on 2026-09-20)
+**Last Updated:** 2026-09-23 (session 7)
+**Workspace:** `D:\etc\Program\7Days\Trading_Journal` (fresh clone this session; prior sessions were on `G:\7Days\Trading_Journal`)
 **Repo:** https://github.com/embrizo/Trading_Journal (`main`) — the old `Break_Signal` remote is archived
 **Primary Language/Runtime:** Python 3.11+ (asyncio); Pine Script v6 (Phase 1)
 
@@ -10,23 +10,29 @@ that does real work.
 
 ---
 
-## Status: journal + AI coach fully built (J0–J6), awaiting live checks and the Pi deploy (2026-09-20)
+## Status: journal + AI coach fully built (J0–J6); Gemini wired; Telegram bot verified live (2026-09-23)
 
 Everything in [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md)
-§5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested (267 tests + 3
-key-gated live evals) and pushed.
+§5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested and pushed.
 The three front-ends (CLI, Claude Code MCP, Telegram bot) share one `Tools` surface;
-`analytics.py` is the only place numbers are computed. What has NOT been exercised
-against real services from this machine:
+`analytics.py` is the only place numbers are computed. **The coach now supports Gemini**
+(`ai.provider: auto | gemini | anthropic` in `coach.py`/`config.py`, landed in commit
+`24aa7a5` — the "user will swap to Gemini" item from session 6 is done, not just planned).
+Session 7 ran on a fresh clone (new machine) and closed out several live-check gaps:
 
-- the Anthropic API (`/ask`, `/review`, report narrative) — no key here
-- Telegram commands round-trip — no token here (handlers are unit-tested)
-- OKX — DNS-blocked on this ISP. **Worked around 2026-09-23: `exchange: binance`**
-  (see below), and with it the watcher, `market_snapshot` and the dashboard chart
-  all run live from here. OKX REST + WS were verified live on 2026-09-07 from the
-  other machine and remain the default.
+- **Telegram command bot — verified live** (2026-09-23, session 7): real bot token from
+  BotFather, chat id found via `getUpdates` after the user messaged the bot, `channels.telegram`
+  + `telegram_bot` both enabled in the local `config.yaml` (gitignored — token/chat_id never
+  committed). `/help` and `/stats` round-tripped for real over the network. `allowed_chat_ids`
+  restricts writes to that one chat id, per `CLAUDE.md`.
+- the Anthropic API (`/ask`, `/review`, report narrative) — no key on this machine; Gemini
+  likewise untested live here (no `GEMINI_API_KEY`)
+- OKX — still 403/DNS-blocked from this ISP too (a second, different machine). `exchange:
+  binance` worked around it again; watcher, `market_snapshot` and the dashboard chart all run
+  live. OKX REST + WS were verified live on 2026-09-07 from a third machine and remain the default.
 - Docker build on the Pi — `docker compose config` validates; image not built
-- `chart_png` — matplotlib not installed locally
+- `chart_png` — matplotlib now installed on this machine (session 7: `pip install pandas
+  mplfinance matplotlib`, all missing on the fresh clone) but not yet exercised
 
 Break Signal itself (Phase 2 watcher) is unchanged in behaviour except: alerts now
 persist to `journal.db` and carry a history footer, and the startup backfill retries
@@ -143,9 +149,8 @@ URL will fail on push rather than diverge — repoint it with
 
 ## Next steps
 
-0. **Journal + AI coach — all code done (J0–J6, 2026-09-20).** Nothing to build until the live checks below surface something. **Live checks still owed:** (a) `.mcp.json` loads in a fresh Claude Code session (confirmed 2026-09-20 — the `journal` MCP tools appeared in-session); (b) LLM-backed `/ask`, `/review`, report narrative and `tests/evals` (see the Gemini note below); (c) Telegram bot: `config.yaml` with `telegram_bot.enabled: true`, `allowed_chat_ids: ["<your id>"]`, real `channels.telegram.bot_token`, then `python -m break_signal -c config.yaml` and send `/help`; (d) OKX from a machine where it resolves; (e) Pi: `docker compose up -d --build`, open `http://<pi>:8787/`.
-   **Gemini (user decision, 2026-09-20): the user will swap the coach's LLM backend to the Gemini API themselves.** Do not build Anthropic-side work (evals, key handling, prompt tuning) unless asked. The Anthropic-specific seams are all in `journal/coach.py` (`AsyncAnthropic`, `beta.messages.tool_runner`, `@beta_async_tool`, `messages.parse` for the pydantic `Review`, `_friendly()` error mapping, `load_screenshots` image blocks) plus `ai.model` in `config.py`/`config.example.yaml`, `requirements-ai.txt` and the `[ai]` extra in `pyproject.toml`. Everything else (`Tools`, `prompts.py`, `parity_check`, `ai_analysis` storage, `format_review`, the bot/CLI/report callers, `tests/test_coach.py`'s FakeClient contract) is backend-agnostic and should survive the swap.
-1. **Create `config.yaml`** with real Telegram token + chat_id + Discord webhook; run `python -m break_signal -c config.yaml` and confirm a real break fires to both channels (validates the notify + render layer — the only M5 piece not yet exercised live). Completes M5. *(REST + WS data paths already verified live 2026-09-07.)*
+0. **Journal + AI coach — all code done (J0–J6, 2026-09-20); Gemini backend done (commit `24aa7a5`).** **Live checks still owed:** (a) `.mcp.json` loads in a fresh Claude Code session (confirmed 2026-09-20); (b) a real LLM call — `/ask`, `/review`, report narrative — with either `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` set (still untested live, no key on any machine used so far); (c) ~~Telegram bot~~ **done 2026-09-23** — `/help` and `/stats` verified live over a real bot token; (d) OKX from a machine where it isn't blocked (403/DNS-blocked on two different machines/ISPs so far — `exchange: binance` is the working fallback); (e) Pi: `docker compose up -d --build`, open `http://<pi>:8787/`.
+1. **Discord webhook** — same pattern as Telegram: `channels.discord.enabled: true` + `webhook_url` from a channel's Integrations → Webhooks, then confirm a real break posts. Not yet done; Telegram is verified, Discord isn't. Completes M5 once both are live. *(REST + WS data paths already verified live 2026-09-07.)*
 2. **User action: load Pine indicator on TradingView** — verify auto lines match the reference screenshot; tune `pivotLen`/`atrBreak` (M2/M3). Copy winning tuning into `config.example.yaml` `params:` for parity.
 3. **Deploy to Pi 5** — `docker compose up -d --build`; point `./data` (state dir) at an SSD/USB.
 4. **M6 backtest report** — extend `replay.py` output into a hit-rate summary over ~12 months across SOL + BTC + ETH to check the strict defaults don't overfit SOL.
@@ -153,6 +158,31 @@ URL will fail on push rather than diverge — repoint it with
 6. **(Housekeeping) push `main`** to GitHub when ready — `3590c43` is local-only.
 
 ## Session log
+
+### Session 7 — 2026-09-23
+- Fresh clone on a new machine (`D:\etc\Program\7Days\Trading_Journal`). `git clone` (the folder
+  was empty, not a prior `git init`), verified `main` clean and matches origin.
+- **Live-checked the repo state against both handoff files and found them stale by one commit**:
+  `24aa7a5` ("Gemini AI coach + dashboard enhancements") had already shipped Gemini support
+  (`ai.provider: auto | gemini | anthropic`) and dashboard notes/symbol-autocomplete, but both
+  handoffs still listed Gemini as a future swap the user would do themselves. Corrected here.
+- **Ran the app for real**: installed missing deps (`pandas`, `mplfinance`, `matplotlib` — not
+  in the environment despite being in `requirements.txt`), copied `config.example.yaml` →
+  `config.yaml` (gitignored). OKX returned HTTP 403 from this machine too (a second, different
+  ISP now blocked/rejected after the session-6 DNS block) — set `exchange: binance` again.
+  Dashboard came up clean at `127.0.0.1:8787`, watchers backfilled, WS subscribed, chart
+  rendered candles.
+- **Wired up the Telegram bot live** with a real BotFather token (`@Treading_Jornal_bot`).
+  Chat id wasn't known upfront — found it by asking the user to message the bot, then polling
+  `getUpdates` directly. Hit a real-world gotcha worth remembering: the user's first `/start`
+  sat at a single checkmark (sent-from-device, not yet ack'd by Telegram's server) for several
+  minutes — `getUpdates` correctly showed nothing until the message actually reached the server
+  and flipped to a double checkmark. Set `channels.telegram.{enabled,bot_token,chat_id}` and
+  `telegram_bot.{enabled,allowed_chat_ids}`, restarted the service, confirmed `/help` and
+  `/stats` round-trip for real. Token/chat id live only in the local gitignored `config.yaml`,
+  never in this file or in git.
+- Discord webhook and the AI coach's live LLM path remain unverified (no key/webhook on this
+  machine) — see Next steps.
 
 ### Session 6 — 2026-09-22
 - **Local test run of the whole service** (`config.yaml` written for local use — gitignored, alerts + AI off, dashboard on `127.0.0.1:8787`). Service starts, dashboard renders every panel from the DB (equity canvas actually painted, no overflow, no JS errors), CLI round-trip `add → event → close → show → stats → export → backup → footer → memories → report` all good, `backup` self-verified `integrity=ok`, keyless `ask` prints the friendly one-liner. `/api/chart` 502s and the watchers loop their backfill retry — OKX is DNS-blocked here, both handled as designed. All journal writes went to a scratch copy of the DB.

@@ -1,7 +1,7 @@
 # ANTIGRAVITY_HANDOFF.md — Trading Journal
 
-**Last Updated:** 2026-09-23
-**Workspace:** `G:\7Days\Trading_Journal`
+**Last Updated:** 2026-09-23 (session 7)
+**Workspace:** `D:\etc\Program\7Days\Trading_Journal` (fresh clone this session)
 **Repo:** https://github.com/embrizo/Trading_Journal (`main`) — old `Break_Signal` remote is archived
 **Tech Stack:** Python 3.11+ (asyncio, numpy, pandas, aiohttp, websockets, pydantic, mcp) · Pine Script v6 · SQLite (WAL) · Docker (ARM64 / Raspberry Pi 5) · TradingView Lightweight Charts
 
@@ -20,6 +20,19 @@ The three front-ends (CLI, Claude Code MCP server, Telegram bot) share one `Tool
   2. `db.update_trade`: Automatically computes `risk_pct` from `risk_amount` when `account_size` is configured.
   3. `tools.update_trade`: Re-runs `rules.check` and `record_violations` on trade updates so rule breaches/clears are always persisted.
 - **`.gitignore` fixed**: inline comment on `pic/` separated so git properly ignores exchange screenshots.
+- **Gemini API integration shipped** (commit `24aa7a5`, same day) — `journal/coach.py` now
+  supports `ai.provider: auto | gemini | anthropic`. This was previously tracked below as a
+  future step; it's done.
+
+### Session 7 (2026-09-23, fresh clone / new machine)
+- Ran the full service locally end to end: installed missing deps (`pandas`, `mplfinance`,
+  `matplotlib`), created a local `config.yaml` from the example, set `exchange: binance`
+  (OKX returned HTTP 403 from this machine's ISP too). Dashboard, watchers, and live WS
+  streaming all confirmed working at `http://127.0.0.1:8787/`.
+- **Telegram command bot verified live** with a real bot token — `channels.telegram` and
+  `telegram_bot` enabled, `allowed_chat_ids` restricted to the user's chat id (found via
+  `getUpdates`), `/help` and `/stats` round-tripped for real. This was previously an open
+  live-check item; it's now done. Discord webhook and a live LLM call are still unverified.
 
 ---
 
@@ -83,14 +96,14 @@ docker compose up -d --build
 
 ## 4. Prioritized Next Steps
 
-1. **AI Coach Gemini API Integration**:
-   - Transition `journal/coach.py` to support Google Gemini API (or configurable Anthropic/Gemini).
-   - Seams identified: `AsyncAnthropic` client, tool calling runner, structured output for `Review`, screenshot/image analysis.
-2. **CLI `update` command**:
+1. **CLI `update` command**:
    - Add CLI support for `update_trade` (currently available only on `Tools` / MCP).
-3. **Live Verification**:
+2. **Live Verification** (Telegram bot done 2026-09-23; the rest still open):
+   - A real LLM call through the coach (`/ask`, `/review`, report narrative) with either
+     `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` set — untested live on any machine so far.
+   - Discord webhook — same pattern as Telegram, not yet wired to a real webhook URL.
    - TradingView Pine indicator verification and parameter tuning (`pivotLen`, `atrBreak`).
-   - Telegram Bot live smoke test with real bot token and allowed chat ID.
    - Raspberry Pi 5 Docker deployment.
-4. **M6 Multi-Symbol Backtest Report**:
+   - OKX from a machine where it isn't blocked (403/DNS-blocked on two machines so far).
+3. **M6 Multi-Symbol Backtest Report**:
    - Extend `replay.py` across SOL, BTC, ETH to verify default parameters.
