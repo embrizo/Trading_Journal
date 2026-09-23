@@ -25,8 +25,19 @@ Session 7 ran on a fresh clone (new machine) and closed out several live-check g
   + `telegram_bot` both enabled in the local `config.yaml` (gitignored — token/chat_id never
   committed). `/help` and `/stats` round-tripped for real over the network. `allowed_chat_ids`
   restricts writes to that one chat id, per `CLAUDE.md`.
-- the Anthropic API (`/ask`, `/review`, report narrative) — no key on this machine; Gemini
-  likewise untested live here (no `GEMINI_API_KEY`)
+- **AI coach `/ask` — verified live with a real Gemini key** (2026-09-23, session 7): user
+  pasted a real `GEMINI_API_KEY` into `config.yaml`'s `ai.api_key` themselves; `ai.model:
+  gemini-3.6-flash` alone is enough to trigger `is_gemini` (no explicit `ai.provider` needed).
+  `python -m break_signal.journal ask "..."` ran 4 real tool calls (`journal_memories`,
+  `journal_list_rules`, `journal_stats`, `journal_search_trades`) and answered correctly with
+  n=0 for closed trades — no invented numbers. First two attempts hit a 429 (free-tier rate
+  limit, confirmed transient — a direct single-shot call succeeded immediately, and the same
+  `/ask` call succeeded a few seconds later). Confirmed `gemini-3.6-flash` is the right current
+  model: Google's own 404 for the older `gemini-2.5-flash` names it as the replacement.
+  Discovered `requirements-ai.txt` / `pyproject.toml`'s `[ai]` extra were missing `google-genai`
+  entirely (fixed in `b277c8e`, before this test). The Anthropic path (`/review`, report
+  narrative, and `/ask` under `ai.provider: anthropic`) remains unverified — no Anthropic key
+  used against the coach this session.
 - OKX — still 403/DNS-blocked from this ISP too (a second, different machine). `exchange:
   binance` worked around it again; watcher, `market_snapshot` and the dashboard chart all run
   live. OKX REST + WS were verified live on 2026-09-07 from a third machine and remain the default.
@@ -149,7 +160,7 @@ URL will fail on push rather than diverge — repoint it with
 
 ## Next steps
 
-0. **Journal + AI coach — all code done (J0–J6, 2026-09-20); Gemini backend done (commit `24aa7a5`).** **Live checks still owed:** (a) `.mcp.json` loads in a fresh Claude Code session (confirmed 2026-09-20); (b) a real LLM call — `/ask`, `/review`, report narrative — with either `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` set (still untested live, no key on any machine used so far); (c) ~~Telegram bot~~ **done 2026-09-23** — `/help` and `/stats` verified live over a real bot token; (d) OKX from a machine where it isn't blocked (403/DNS-blocked on two different machines/ISPs so far — `exchange: binance` is the working fallback); (e) Pi: `docker compose up -d --build`, open `http://<pi>:8787/`.
+0. **Journal + AI coach — all code done (J0–J6, 2026-09-20); Gemini backend done (commit `24aa7a5`).** **Live checks still owed:** (a) `.mcp.json` loads in a fresh Claude Code session (confirmed 2026-09-20); (b) ~~a real LLM call~~ **`/ask` done 2026-09-23** with a real `GEMINI_API_KEY` (4 real tool calls, correct n=0 answer) — `/review`, report narrative, and the Anthropic path (`ai.provider: anthropic`) are still untested live; (c) ~~Telegram bot~~ **done 2026-09-23** — `/help` and `/stats` verified live over a real bot token; (d) OKX from a machine where it isn't blocked (403/DNS-blocked on two different machines/ISPs so far — `exchange: binance` is the working fallback); (e) Pi: `docker compose up -d --build`, open `http://<pi>:8787/`.
 1. **Discord webhook** — same pattern as Telegram: `channels.discord.enabled: true` + `webhook_url` from a channel's Integrations → Webhooks, then confirm a real break posts. Not yet done; Telegram is verified, Discord isn't. Completes M5 once both are live. *(REST + WS data paths already verified live 2026-09-07.)*
 2. **User action: load Pine indicator on TradingView** — verify auto lines match the reference screenshot; tune `pivotLen`/`atrBreak` (M2/M3). Copy winning tuning into `config.example.yaml` `params:` for parity.
 3. **Deploy to Pi 5** — `docker compose up -d --build`; point `./data` (state dir) at an SSD/USB.
@@ -181,8 +192,20 @@ URL will fail on push rather than diverge — repoint it with
   `telegram_bot.{enabled,allowed_chat_ids}`, restarted the service, confirmed `/help` and
   `/stats` round-trip for real. Token/chat id live only in the local gitignored `config.yaml`,
   never in this file or in git.
-- Discord webhook and the AI coach's live LLM path remain unverified (no key/webhook on this
-  machine) — see Next steps.
+- **Ran the full test suite** (`pytest tests/ -q`): 7 failures, all in `test_coach.py`, all
+  from `anthropic` not being installed on this machine (only `google-genai` was). Installed it
+  to get a clean baseline (267 passed, 3 skipped) — but the real find was that
+  `requirements-ai.txt` and `pyproject.toml`'s `[ai]` extra only ever listed `anthropic` + `mcp`,
+  never `google-genai`, even though the coach has supported `ai.provider: gemini` since
+  `24aa7a5`. Fixed both files, committed as `b277c8e`.
+- **AI coach `/ask` verified live with a real Gemini key** — see the Status section above for
+  detail. The user pasted their own `GEMINI_API_KEY` directly into `config.yaml` (I never
+  touched the raw key). One diagnostic misstep worth remembering: typing the key literally into
+  a `python -c "..."` command to probe the API directly got blocked by the credential-leakage
+  guard — redid it as a script that reads the key from `config.yaml` at runtime instead, which
+  worked and is the pattern to use next time.
+- Discord webhook, `/review`, report narrative, and the Anthropic coach path remain unverified
+  (no webhook/Anthropic key exercised this session) — see Next steps.
 
 ### Session 6 — 2026-09-22
 - **Local test run of the whole service** (`config.yaml` written for local use — gitignored, alerts + AI off, dashboard on `127.0.0.1:8787`). Service starts, dashboard renders every panel from the DB (equity canvas actually painted, no overflow, no JS errors), CLI round-trip `add → event → close → show → stats → export → backup → footer → memories → report` all good, `backup` self-verified `integrity=ok`, keyless `ask` prints the friendly one-liner. `/api/chart` 502s and the watchers loop their backfill retry — OKX is DNS-blocked here, both handled as designed. All journal writes went to a scratch copy of the DB.

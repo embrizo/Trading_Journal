@@ -32,7 +32,14 @@ The three front-ends (CLI, Claude Code MCP server, Telegram bot) share one `Tool
 - **Telegram command bot verified live** with a real bot token — `channels.telegram` and
   `telegram_bot` enabled, `allowed_chat_ids` restricted to the user's chat id (found via
   `getUpdates`), `/help` and `/stats` round-tripped for real. This was previously an open
-  live-check item; it's now done. Discord webhook and a live LLM call are still unverified.
+  live-check item; it's now done.
+- **Full test suite run found `requirements-ai.txt` / `pyproject.toml`'s `[ai]` extra missing
+  `google-genai`** despite Gemini support shipping in `24aa7a5` — a clean AI-extra install
+  would ImportError under `ai.provider: gemini`. Fixed, committed as `b277c8e`.
+- **AI coach `/ask` verified live with a real `GEMINI_API_KEY`** (user's own key, pasted
+  directly into `config.yaml`): 4 real tool calls, correct n=0 answer for closed-trade win
+  rate. `gemini-3.6-flash` confirmed as the current correct model. `/review`, report
+  narrative, the Anthropic coach path, and the Discord webhook remain unverified.
 
 ---
 
@@ -58,7 +65,7 @@ The three front-ends (CLI, Claude Code MCP server, Telegram bot) share one `Tool
   - `web.py` + `static/dashboard.html`: aiohttp dashboard with Lightweight Charts + webhook.
   - `webhook.py`: TradingView alert receiver endpoint (`/pine/<secret>`).
   - `backup.py` & `export.py`: Automated database snapshots and markdown/CSV/JSON exports.
-  - `coach.py`: AI coach integration (Anthropic currently; Gemini migration planned).
+  - `coach.py`: AI coach integration — `ai.provider: auto | gemini | anthropic`; Gemini verified live 2026-09-23.
 
 ---
 
@@ -69,7 +76,7 @@ The three front-ends (CLI, Claude Code MCP server, Telegram bot) share one `Tool
 3. **All front-end writes go through `journal/tools.py`**: Ensures rules, migrations, auto-linking, and validation are enforced.
 4. **Pine ↔ Python parity**: `trendline._build_side` stops at `last_bar - 1`. Parity in pivots (`use_fine_pivots`, `pivot_len_fine=3`).
 5. **No secret or private data in git**: `config.yaml`, `.env`, `data/journal.db`, and `pic/` must remain gitignored.
-6. **Gemini backend migration**: The coach's LLM interface in `journal/coach.py` is slated to support/switch to Google Gemini API.
+6. **Gemini backend**: `journal/coach.py` supports both Anthropic and Google Gemini (`ai.provider: auto | gemini | anthropic`); a `gemini` model name alone is enough to auto-select it. Verified live 2026-09-23.
 
 ---
 
@@ -98,9 +105,10 @@ docker compose up -d --build
 
 1. **CLI `update` command**:
    - Add CLI support for `update_trade` (currently available only on `Tools` / MCP).
-2. **Live Verification** (Telegram bot done 2026-09-23; the rest still open):
-   - A real LLM call through the coach (`/ask`, `/review`, report narrative) with either
-     `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` set — untested live on any machine so far.
+2. **Live Verification** (Telegram bot and `/ask` done 2026-09-23; the rest still open):
+   - `/review` and the weekly report narrative — untested live (only `/ask` has been run
+     against a real key so far).
+   - The Anthropic coach path (`ai.provider: anthropic`) — only Gemini has been verified live.
    - Discord webhook — same pattern as Telegram, not yet wired to a real webhook URL.
    - TradingView Pine indicator verification and parameter tuning (`pivotLen`, `atrBreak`).
    - Raspberry Pi 5 Docker deployment.
