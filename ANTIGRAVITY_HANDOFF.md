@@ -9,7 +9,7 @@
 
 ## Status: Journal + AI Coach Built (J0–J6), 4 Real Positions Logged (2026-09-23)
 
-Everything in [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md) §5 (J0–J6) is implemented and unit-tested (**236 unit tests pass, 3 live Anthropic-evals skipped**).
+Everything in [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md) §5 (J0–J6) is implemented and unit-tested (**278 unit tests pass, 3 live Anthropic-evals skipped** — run them in the project `.venv`, see Session 7).
 The three front-ends (CLI, Claude Code MCP server, Telegram bot) share one `Tools` surface in `src/break_signal/journal/tools.py`.
 `analytics.py` is the single source of truth where metrics and numbers are computed.
 
@@ -31,8 +31,8 @@ The three front-ends (CLI, Claude Code MCP server, Telegram bot) share one `Tool
   streaming all confirmed working at `http://127.0.0.1:8787/`.
 - **Telegram command bot verified live** with a real bot token — `channels.telegram` and
   `telegram_bot` enabled, `allowed_chat_ids` restricted to the user's chat id (found via
-  `getUpdates`), `/help` and `/stats` round-tripped for real. This was previously an open
-  live-check item; it's now done.
+  `getUpdates`), `/help` and `/trade` round-tripped for real (trade #1, XRP 4H LONG, is in the
+  journal). `/stats` has not been sent yet — the one remaining Telegram check.
 - **Full test suite run found `requirements-ai.txt` / `pyproject.toml`'s `[ai]` extra missing
   `google-genai`** despite Gemini support shipping in `24aa7a5` — a clean AI-extra install
   would ImportError under `ai.provider: gemini`. Fixed, committed as `b277c8e`.
@@ -40,6 +40,16 @@ The three front-ends (CLI, Claude Code MCP server, Telegram bot) share one `Tool
   directly into `config.yaml`): 4 real tool calls, correct n=0 answer for closed-trade win
   rate. `gemini-3.6-flash` confirmed as the current correct model. `/review`, report
   narrative, the Anthropic coach path, and the Discord webhook remain unverified.
+- **Code review fixes**: `websockets` pin raised to `>=13,<17` (the old `<13` made
+  `pip install -e .[ai]` unresolvable against google-genai); AI extra bounds aligned across
+  `pyproject.toml` / `requirements-ai.txt`; compose passes `GEMINI_API_KEY`; Gemini `/ask`
+  honours `ai.max_tool_calls`; 11 Gemini unit tests added; key-hint messages and the config
+  template now cover both providers.
+- **Binance live stream fixed**: `binance_ws.py` must use `/market/ws/<stream>` — the legacy
+  `/ws/<stream>` path connects but sends nothing, so the Binance watcher never received a
+  candle. Verified with a real closed 1m candle.
+- **Environment**: bare `python`/`pip` on this machine is the hermes-agent venv (another
+  tool's). Use the gitignored project venv: `.venv\Scripts\python -m pip install -e ".[ai,dev]"`.
 
 ---
 
@@ -103,6 +113,9 @@ docker compose up -d --build
 
 ## 4. Prioritized Next Steps
 
+0. **WS idle timeout**: add an idle timeout around `ws.recv()` in `okx_ws.py` / `binance_ws.py`
+   so a silent stream reconnects and logs instead of hanging (this is what hid the dead
+   Binance path).
 1. **CLI `update` command**:
    - Add CLI support for `update_trade` (currently available only on `Tools` / MCP).
 2. **Live Verification** (Telegram bot and `/ask` done 2026-09-23; the rest still open):

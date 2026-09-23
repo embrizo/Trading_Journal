@@ -23,7 +23,9 @@ Session 7 ran on a fresh clone (new machine) and closed out several live-check g
 - **Telegram command bot — verified live** (2026-09-23, session 7): real bot token from
   BotFather, chat id found via `getUpdates` after the user messaged the bot, `channels.telegram`
   + `telegram_bot` both enabled in the local `config.yaml` (gitignored — token/chat_id never
-  committed). `/help` and `/stats` round-tripped for real over the network. `allowed_chat_ids`
+  committed). `/help` round-tripped for real over the network, `/trade` parse errors came back
+  correctly, and a successful `/trade` left trade #1 (XRP 4H LONG) in the journal. **`/stats` was
+  never actually sent — still unchecked live.** `allowed_chat_ids`
   restricts writes to that one chat id, per `CLAUDE.md`.
 - **AI coach `/ask` — verified live with a real Gemini key** (2026-09-23, session 7): user
   pasted a real `GEMINI_API_KEY` into `config.yaml`'s `ai.api_key` themselves; `ai.model:
@@ -72,7 +74,7 @@ Full spec: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — algorithm (§2
   - `params.py`, `types.py` — config dataclasses + `Candle`/`Trendline` models
 - **`data/`** — one `(rest, ws)` provider pair per exchange behind [`data.provider(exchange)`](src/break_signal/data/__init__.py); `config.exchange` picks. Callers never import an exchange module directly, and **symbols are canonical OKX-style instIds everywhere** — each provider translates at its own edge.
   - **OKX** (default, written 2026-09-07): [okx_rest.py](src/break_signal/data/okx_rest.py) (paged backfill: `/candles` then `/history-candles` with `after`, confirmed bars only, reversed to oldest-first) + [okx_ws.py](src/break_signal/data/okx_ws.py) (live `wss://ws.okx.com:8443/ws/v5/business`, text `ping`/`pong` after 20s idle, reconnect w/ backoff, only `confirm=="1"`). REST verified live 2026-09-07; WS not yet run live. Hosts: `OKX_REST_URL` / `OKX_WS_URL`.
-  - **Binance** USDⓈ-M futures (added 2026-09-23): [binance_rest.py](src/break_signal/data/binance_rest.py) (`/fapi/v1/klines`, 1500/call, paged backwards with `endTime`; no `confirm` flag, so the forming bar is dropped by `closeTime` vs the clock) + [binance_ws.py](src/break_signal/data/binance_ws.py) (`<sym>@kline_<interval>`, emits on `k.x == true`; the library answers Binance's ping frames, so no manual heartbeat). Both verified live from this machine. Hosts: `BINANCE_REST_URL` / `BINANCE_WS_URL`.
+  - **Binance** USDⓈ-M futures (added 2026-09-23): [binance_rest.py](src/break_signal/data/binance_rest.py) (`/fapi/v1/klines`, 1500/call, paged backwards with `endTime`; no `confirm` flag, so the forming bar is dropped by `closeTime` vs the clock) + [binance_ws.py](src/break_signal/data/binance_ws.py) (`/market/ws/<sym>@kline_<interval>`, emits on `k.x == true`; the library answers Binance's ping frames, so no manual heartbeat). **The WS path must be `/market/ws/`** — the legacy `/ws/` path accepts the connection and then sends nothing, so the watcher sat "subscribed" forever with zero candles and zero warnings (found and fixed session 7; the session-6 "verified live" only ever saw the subscribe log line). REST verified live; WS verified live on the `/market/ws/` path 2026-09-23 (a real closed 1m candle). Hosts: `BINANCE_REST_URL` / `BINANCE_WS_URL`.
 - **`notify/`** — [base.py](src/break_signal/notify/base.py) protocol + [telegram.py](src/break_signal/notify/telegram.py) + [discord.py](src/break_signal/notify/discord.py); failures isolated per channel.
 - **`render/`** — [chart.py](src/break_signal/render/chart.py): mplfinance snapshot with lines drawn.
 - **`backtest/`** — [replay.py](src/break_signal/backtest/replay.py): growing-window replay → CSV.
@@ -157,10 +159,12 @@ URL will fail on push rather than diverge — repoint it with
 - Two dev machines have touched this repo: `C:\Users\Pattapon\...` (sessions 3–4, OKX reachable) and `C:\Users\embri\...` (sessions 1–2, 5; `python` on PATH = hermes-agent venv, Python 3.11.15, has numpy, pytest, aiohttp, mcp 1.26, pydantic, yaml — NOT anthropic, pandas, mplfinance).
 - **On the `embri` machine OKX is DNS-blocked** (`www.okx.com`, `aws.okx.com`, etc. resolve to nothing — ISP block). `market_snapshot`, `replay.py`, and the watcher cannot fetch there without a VPN; the MCP tool returns a clear `error` in that case. Everything journal-side works offline.
 - Core + journal tests run with just numpy + pytest. `aiohttp`, `websockets`, `pandas`, `mplfinance`, `matplotlib` are needed for the full service; `mcp` for the MCP server (`pip install -e .[ai]`).
+- **Session 7 machine (`D:\etc\Program\7Days\Trading_Journal`)**: bare `python`/`pip` on PATH is the **hermes-agent venv** — another tool's environment. Don't install into it (session 7 did, early on: pandas, mplfinance, matplotlib, anthropic — additive, but it shouldn't happen again). Use the project venv instead: `.venv\Scripts\python` (gitignored), built with `python -m venv .venv` + `.venv\Scripts\python -m pip install -e ".[ai,dev]"`; 278 tests pass there on websockets 16 / google-genai 2.25. `.claude/launch.json` still says `python` (hermes); point it at `.venv\Scripts\python` if the service should run on the pinned versions. OKX returns 403 here too.
 
 ## Next steps
 
-0. **Journal + AI coach — all code done (J0–J6, 2026-09-20); Gemini backend done (commit `24aa7a5`).** **Live checks still owed:** (a) `.mcp.json` loads in a fresh Claude Code session (confirmed 2026-09-20); (b) ~~a real LLM call~~ **`/ask` done 2026-09-23** with a real `GEMINI_API_KEY` (4 real tool calls, correct n=0 answer) — `/review`, report narrative, and the Anthropic path (`ai.provider: anthropic`) are still untested live; (c) ~~Telegram bot~~ **done 2026-09-23** — `/help` and `/stats` verified live over a real bot token; (d) OKX from a machine where it isn't blocked (403/DNS-blocked on two different machines/ISPs so far — `exchange: binance` is the working fallback); (e) Pi: `docker compose up -d --build`, open `http://<pi>:8787/`.
+0. **Journal + AI coach — all code done (J0–J6, 2026-09-20); Gemini backend done (commit `24aa7a5`).** **Live checks still owed:** (a) `.mcp.json` loads in a fresh Claude Code session (confirmed 2026-09-20); (b) ~~a real LLM call~~ **`/ask` done 2026-09-23** with a real `GEMINI_API_KEY` (4 real tool calls, correct n=0 answer) — `/review`, report narrative, and the Anthropic path (`ai.provider: anthropic`) are still untested live; (c) ~~Telegram bot~~ **mostly done 2026-09-23** — `/help` and `/trade` verified live over a real bot token; send `/stats` once to close it out; (d) OKX from a machine where it isn't blocked (403/DNS-blocked on two different machines/ISPs so far — `exchange: binance` is the working fallback); (e) Pi: `docker compose up -d --build`, open `http://<pi>:8787/`.
+0b. **WS idle timeout** — wrap `ws.recv()` in `okx_ws.py` / `binance_ws.py` with an idle timeout (Binance pushes klines every ~250 ms, so e.g. 60 s of silence is a dead stream) so it reconnects + logs a warning instead of waiting forever. The dead Binance `/ws/` path went unnoticed for exactly this reason.
 1. **Discord webhook** — same pattern as Telegram: `channels.discord.enabled: true` + `webhook_url` from a channel's Integrations → Webhooks, then confirm a real break posts. Not yet done; Telegram is verified, Discord isn't. Completes M5 once both are live. *(REST + WS data paths already verified live 2026-09-07.)*
 2. **User action: load Pine indicator on TradingView** — verify auto lines match the reference screenshot; tune `pivotLen`/`atrBreak` (M2/M3). Copy winning tuning into `config.example.yaml` `params:` for parity.
 3. **Deploy to Pi 5** — `docker compose up -d --build`; point `./data` (state dir) at an SSD/USB.
@@ -189,8 +193,9 @@ URL will fail on push rather than diverge — repoint it with
   sat at a single checkmark (sent-from-device, not yet ack'd by Telegram's server) for several
   minutes — `getUpdates` correctly showed nothing until the message actually reached the server
   and flipped to a double checkmark. Set `channels.telegram.{enabled,bot_token,chat_id}` and
-  `telegram_bot.{enabled,allowed_chat_ids}`, restarted the service, confirmed `/help` and
-  `/stats` round-trip for real. Token/chat id live only in the local gitignored `config.yaml`,
+  `telegram_bot.{enabled,allowed_chat_ids}`, restarted the service, confirmed `/help` round-trips
+  for real (`/stats` was suggested but never sent — an earlier version of this entry wrongly
+  claimed it). Token/chat id live only in the local gitignored `config.yaml`,
   never in this file or in git.
 - **Ran the full test suite** (`pytest tests/ -q`): 7 failures, all in `test_coach.py`, all
   from `anthropic` not being installed on this machine (only `google-genai` was). Installed it
@@ -204,6 +209,33 @@ URL will fail on push rather than diverge — repoint it with
   a `python -c "..."` command to probe the API directly got blocked by the credential-leakage
   guard — redid it as a script that reads the key from `config.yaml` at runtime instead, which
   worked and is the pattern to use next time.
+- **`/code-review` of this session's commits → 10 findings, all fixed**:
+  - `google-genai` (needs `websockets>=13`) had made `pip install -e .[ai]` **unresolvable**
+    against the old `websockets>=12,<13` pin (confirmed: pip ResolutionImpossible across every
+    google-genai release). Raised the pin to `websockets>=13,<17` in both manifests — which also
+    stops the AI Docker image silently getting a different websockets major than the plain one.
+    Clean `pip install -e ".[ai,dev]"` now resolves (websockets 16.1.1, google-genai 2.25).
+  - AI extra bounds now in lockstep across `pyproject.toml` / `requirements-ai.txt`:
+    `anthropic>=1.0,<2`, `google-genai>=2.12,<3` (floor = the version actually run), `mcp>=1.2,<2`.
+  - `docker-compose.yml` now passes `GEMINI_API_KEY` through (only `ANTHROPIC_API_KEY` was).
+  - Gemini `/ask` now honours `ai.max_tool_calls` via
+    `automatic_function_calling.maximum_remote_calls` (it was only enforced on the Anthropic path).
+    Unit-tested and accepted by `GenerateContentConfig` on google-genai 2.25; three live re-runs
+    all hit 429 (free-tier quota spent), so the capped call is not yet re-verified live.
+  - "AI coach is off" (bot) and CLI help no longer name only `ANTHROPIC_API_KEY`;
+    `config.example.yaml`'s `ai:` block documents `provider` and the Gemini model.
+  - 11 new Gemini tests in `tests/test_coach.py` (fake `genai` client that runs the tools the way
+    automatic function calling does): provider resolution matrix, tool-surface parity with the
+    Anthropic wrappers, `/ask` shape + storage + call cap, parity guard + budget, `/review`
+    schema/storage/bad-JSON, narrative. 278 pass.
+  - Handoffs no longer claim `/stats` was verified — it was never sent.
+- **Found while verifying the websockets bump: the Binance kline stream was dead.** The
+  `/ws/<stream>` path connects, logs "subscribed", then delivers nothing — on websockets 15 and 16
+  alike — so on `exchange: binance` no live candle (and therefore no breakout alert) would ever
+  have arrived, with no warning. `/market/ws/<stream>` delivers; switched `binance_ws.py` to it and
+  confirmed a real closed 1m SOL candle through `stream_closed_candles`. Worth considering next: an
+  idle timeout on `ws.recv()` in both WS providers, so a silent stream reconnects and logs instead
+  of waiting forever — that is what hid this.
 - Discord webhook, `/review`, report narrative, and the Anthropic coach path remain unverified
   (no webhook/Anthropic key exercised this session) — see Next steps.
 
