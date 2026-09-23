@@ -3,8 +3,10 @@
 Same contract as :mod:`okx_ws`, including the :class:`ClosedCandle` type, which
 is imported from there so the watcher does not care which exchange it is on.
 
-Stream: ``wss://fstream.binance.com/ws/<symbol>@kline_<interval>`` (symbol lower
-case). Each push carries::
+Stream: ``wss://fstream.binance.com/market/ws/<symbol>@kline_<interval>`` (symbol
+lower case). The legacy ``/ws/<stream>`` path still accepts the connection but
+delivers nothing for market streams, so a watcher on it waits forever without a
+single error. Each push carries::
 
     {"e": "kline", "k": {"t": openTime, "o": .., "h": .., "l": .., "c": ..,
                          "v": volume, "x": isClosed}}
@@ -56,7 +58,7 @@ async def stream_closed_candles(symbol: str, tf: str) -> AsyncIterator[ClosedCan
     (``SOL-USDT-SWAP``); it and ``tf`` are translated to Binance's spelling.
     """
     stream = f"{to_symbol(symbol).lower()}@kline_{to_interval(tf)}"
-    url = f"{WS_URL}/ws/{stream}"
+    url = f"{WS_URL}/market/ws/{stream}"
     backoff = 1.0
 
     while True:
