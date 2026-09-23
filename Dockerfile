@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir \
         --extra-index-url https://www.piwheels.org/simple \
         -r requirements.txt
 
-# Optional AI coach (anthropic SDK) — off by default so the image stays slim.
+# Optional AI coach (google-genai + anthropic SDKs) — off by default so the image stays slim.
 #   docker compose build --build-arg AI_ENABLED=1
 ARG AI_ENABLED=0
 RUN if [ "$AI_ENABLED" = "1" ]; then \

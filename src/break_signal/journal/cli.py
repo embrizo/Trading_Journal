@@ -470,12 +470,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("signal_id", type=int)
     p.set_defaults(fn=cmd_footer)
 
-    p = sub.add_parser("ask", help="ask the AI coach (needs ANTHROPIC_API_KEY)")
+    p = sub.add_parser("ask", help="ask the AI coach (needs GEMINI_API_KEY or ANTHROPIC_API_KEY)")
     p.add_argument("question", nargs="+")
     p.add_argument("--no-store", action="store_true", help="don't record in ai_analysis")
     p.set_defaults(fn=cmd_ask)
 
-    p = sub.add_parser("review", help="AI post-trade review of one trade (needs ANTHROPIC_API_KEY)")
+    p = sub.add_parser("review", help="AI post-trade review of one trade (needs GEMINI_API_KEY or ANTHROPIC_API_KEY)")
     p.add_argument("trade_id", type=int)
     p.add_argument("--json", action="store_true")
     p.add_argument("--no-store", action="store_true")
@@ -484,7 +484,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("report", help="weekly/monthly review (metrics; --narrative adds AI notes)")
     p.add_argument("--kind", choices=["weekly", "monthly"], default="weekly")
-    p.add_argument("--narrative", action="store_true", help="add coach notes (needs ANTHROPIC_API_KEY)")
+    p.add_argument("--narrative", action="store_true", help="add coach notes (needs GEMINI_API_KEY or ANTHROPIC_API_KEY)")
     p.add_argument("--dry-run", action="store_true", help="print only; don't store in ai_analysis")
     p.add_argument("--png", help="also write the equity/tag chart to this path (needs matplotlib)")
     p.add_argument("--json", action="store_true", help="print the metrics block instead of markdown")

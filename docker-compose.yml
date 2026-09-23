@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        # 1 → install the anthropic SDK for /ask, /review and report narratives.
+        # 1 → install the AI coach SDKs (Gemini + Anthropic) for /ask, /review and report narratives.
         AI_ENABLED: ${AI_ENABLED:-0}
     image: break-signal:latest
     container_name: break-signal
@@ -22,6 +22,7 @@ services:
       - BREAK_SIGNAL_CONFIG=/app/config.yaml
       # Passed through from the host shell / a .env file next to this compose
       # file; empty values are ignored by the app.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # Regional OKX hosts if the defaults are geo-blocked where the Pi lives.
       - OKX_REST_URL=${OKX_REST_URL:-https://www.okx.com}

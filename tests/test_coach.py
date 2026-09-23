@@ -1,5 +1,6 @@
-"""Coach unit tests with a fake Anthropic client — no network, no key."""
+"""Coach unit tests with fake Anthropic and Gemini clients — no network, no key."""
 import asyncio
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -7,6 +8,7 @@ import pytest
 
 from break_signal.config import AiCfg
 from break_signal.journal import coach as C
+from break_signal.journal import prompts
 from break_signal.journal.db import JournalDB
 from break_signal.journal.tools import Tools
 
@@ -49,6 +51,44 @@ class FakeClient:
 
         self.beta = SimpleNamespace(messages=Messages())
         self.messages = Messages()
+
+
+class FakeGeminiChat:
+    def __init__(self, client, config):
+        self.client, self.config = client, config
+
+    async def send_message(self, message):
+        self.client.sent.append(message)
+        by_name = {f.__name__: f for f in self.config["tools"]}
+        for name, kw in self.client.script:
+            await by_name[name](**kw)      # what automatic function calling does
+        return SimpleNamespace(text=self.client.answer, usage_metadata=SimpleNamespace(
+            prompt_token_count=100, candidates_token_count=50, total_token_count=150))
+
+
+class FakeGemini:
+    """Pretends to be google.genai.Client (only the aio surface the coach uses)."""
+
+    def __init__(self, script=(), answer="", text=""):
+        self.script, self.answer, self.text = list(script), answer, text
+        self.sent, self.calls = [], []
+        client = self
+
+        class Chats:
+            def create(self, **kw):
+                client.calls.append(kw)
+                return FakeGeminiChat(client, kw["config"])
+
+        class Models:
+            async def generate_content(self, **kw):
+                client.calls.append(kw)
+                return SimpleNamespace(text=client.text, usage_metadata=None)
+
+        self.aio = SimpleNamespace(chats=Chats(), models=Models())
+
+
+def _gemini(**kw):
+    return AiCfg(provider="gemini", model="gemini-3.6-flash", **kw)
 
 
 @pytest.fixture
@@ -223,3 +263,84 @@ def test_review_attaches_screenshots_as_images(tools, tmp_path):
     fake2 = FakeClient(review=_REVIEW)
     asyncio.run(C.Coach(tools, AiCfg(), client=fake2).review(1, with_images=False, store=False))
     assert [c["type"] for c in fake2.calls[0]["messages"][0]["content"]] == ["text"]
+
+
+# ── Gemini backend ───────────────────────────────────────────────────────────
+@pytest.mark.parametrize("provider,model,env,expected", [
+    ("gemini", "claude-opus-5", {}, True),
+    ("anthropic", "gemini-3.6-flash", {"GEMINI_API_KEY": "x"}, False),
+    ("auto", "gemini-3.6-flash", {"ANTHROPIC_API_KEY": "x"}, True),
+    ("auto", "claude-opus-5", {"GEMINI_API_KEY": "x"}, True),
+    ("auto", "claude-opus-5", {"GEMINI_API_KEY": "x", "ANTHROPIC_API_KEY": "x"}, False),
+    ("auto", "claude-opus-5", {}, False),
+])
+def test_provider_resolution(tools, monkeypatch, provider, model, env, expected):
+    for var in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    coach = C.Coach(tools, AiCfg(provider=provider, model=model), client=SimpleNamespace())
+    assert coach.is_gemini is expected
+
+
+def test_gemini_tools_mirror_the_read_only_surface(tools):
+    anthropic_names = {t.name for t in C.Coach(tools, AiCfg(), client=FakeClient()).build_tools()}
+    gem = C.Coach(tools, _gemini(), client=FakeGemini()).build_tools()
+    assert {f.__name__ for f in gem} == anthropic_names
+    for f in gem:
+        assert f.__doc__ and inspect.iscoroutinefunction(f), f.__name__
+
+
+def test_gemini_ask_runs_tools_stores_and_caps_calls(tools):
+    fake = FakeGemini(
+        script=[("journal_stats", {"period": "all"}), ("journal_tag_stats", {"phase": "ENTRY"})],
+        answer="YOUR HISTORY: 3 trades (n=3, small sample), 67% win, avg +0.83R. FOMO: 0/1. YOUR DECISION.",
+    )
+    coach = C.Coach(tools, _gemini(max_tool_calls=5), client=fake)
+    ans = asyncio.run(coach.ask("how am I doing on 4H breaks?", signal={"event": "break_up", "rsi": 68}))
+    assert [c.name for c in ans.tool_calls] == ["journal_stats", "journal_tag_stats"]
+    assert ans.tool_calls[0].result["n"] == 3
+    assert ans.unverified_numbers == []
+    assert ans.usage == {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}
+    kw = fake.calls[0]
+    assert kw["model"] == "gemini-3.6-flash"
+    assert kw["config"]["system_instruction"] == prompts.COACH_V1
+    assert kw["config"]["automatic_function_calling"] == {"maximum_remote_calls": 5}
+    assert fake.sent[0].startswith("how am I doing") and '"rsi": 68' in fake.sent[0]
+    row = tools.db.conn.execute("SELECT kind, model, input_metrics FROM ai_analysis").fetchone()
+    assert row["kind"] == "suggestion" and row["model"] == "gemini-3.6-flash"
+    assert json.loads(row["input_metrics"])["tool_calls"][0]["name"] == "journal_stats"
+
+
+def test_gemini_ask_flags_invented_numbers_and_respects_budget(tools):
+    fake = FakeGemini(script=[("journal_stats", {})], answer="Your win rate is 80% (n=3) with 9.9R expectancy.")
+    coach = C.Coach(tools, _gemini(daily_ask_limit=1), client=fake)
+    assert asyncio.run(coach.ask("?")).unverified_numbers == ["80", "9.9"]
+    with pytest.raises(C.AskBudgetExceeded):
+        asyncio.run(coach.ask("again"))
+
+
+def test_gemini_review_structured_and_stored(tools):
+    pytest.importorskip("google.genai")
+    fake = FakeGemini(text=json.dumps(_REVIEW))
+    r = asyncio.run(C.Coach(tools, _gemini(), client=fake).review(1))
+    assert r["trade_id"] == 1 and r["facts"] == _REVIEW["facts"] and r["prompt_version"] == "review_v1"
+    assert r["unverified_numbers"] == [] and r["analysis_id"] is not None
+    kw = fake.calls[0]
+    assert kw["config"]["response_mime_type"] == "application/json"
+    assert set(kw["config"]["response_schema"].model_fields) == set(_REVIEW)
+    assert "No chart screenshots" in kw["config"]["system_instruction"]
+    assert kw["contents"][-1].startswith("REVIEW CONTEXT")
+    # a response that isn't the schema is reported, not stored
+    bad = asyncio.run(C.Coach(tools, _gemini(), client=FakeGemini(text="not json")).review(1))
+    assert bad["error"] == "failed to parse structured review" and "analysis_id" not in bad
+    kinds = [row["kind"] for row in tools.db.conn.execute("SELECT kind FROM ai_analysis")]
+    assert kinds == ["review"]
+
+
+def test_gemini_narrative(tools):
+    fake = FakeGemini(text="3 trades this week (n=3), and a 12% edge.")
+    text, missing = asyncio.run(C.Coach(tools, _gemini(), client=fake).narrative("sys", {"n": 3}))
+    assert text.startswith("3 trades") and missing == ["12"]
+    kw = fake.calls[0]
+    assert kw["config"] == {"system_instruction": "sys", "max_output_tokens": 4000}

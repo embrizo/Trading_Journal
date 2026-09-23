@@ -39,6 +39,8 @@ HELP = """Journal commands
 /ask <question>      /review <id>     (AI coach, read-only)
 Example: /trade SOL 4H long 231.5 sl 225 tp 245 #breakout #retest -- clean retest"""
 
+_COACH_OFF = "AI coach is off (ai.enabled: false, or no key: GEMINI_API_KEY / ANTHROPIC_API_KEY / ai.api_key)"
+
 
 def _f(x: float | None, nd: int = 2) -> str:
     if x is None:
@@ -309,7 +311,7 @@ class TelegramBot:
 
     async def _cmd_ask(self, rest: str) -> str:
         if self.coach is None:
-            return "AI coach is off (ai.enabled: false or ANTHROPIC_API_KEY missing)"
+            return _COACH_OFF
         if not rest:
             return "usage: /ask <question>"
         from ..journal.coach import AskBudgetExceeded, CoachError
@@ -324,7 +326,7 @@ class TelegramBot:
 
     async def _cmd_review(self, rest: str) -> str:
         if self.coach is None:
-            return "AI coach is off (ai.enabled: false or ANTHROPIC_API_KEY missing)"
+            return _COACH_OFF
         if not rest.isdigit():
             return "usage: /review <trade_id>"
         from ..journal.coach import CoachError, format_review

@@ -571,6 +571,7 @@ class Coach:
                 config={
                     "tools": tools,
                     "system_instruction": prompts.COACH_V1,
+                    "automatic_function_calling": {"maximum_remote_calls": self.cfg.max_tool_calls},
                 }
             )
             resp = await chat.send_message(user)
