@@ -195,8 +195,7 @@ async def generate(db: JournalDB, kind: str = "weekly", coach: "Coach | None" = 
     if coach is not None:
         system = prompts.WEEKLY_V1
         payload = {k: v for k, v in m.items() if k not in ("equity_curve_all_time",)}
-        narrative, unverified = await coach.narrative(system, payload)
-        model = coach.cfg.model
+        narrative, unverified, model = await coach.narrative(system, payload)
     md = render(m, narrative, unverified)
     out = {"kind": kind, "metrics": m, "narrative": narrative, "unverified_numbers": unverified, "markdown": md}
     if store:

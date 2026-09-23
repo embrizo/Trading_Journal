@@ -103,6 +103,8 @@ ai:
   provider: auto              # auto | gemini | anthropic. auto = gemini when the model name
                               # contains "gemini" or only GEMINI_API_KEY is set, else anthropic
   model: claude-opus-5        # or gemini-3.6-flash (set provider/model together)
+  fallback_model: ""          # Gemini only: retried once on a 429 from `model`, e.g.
+                              # gemini-3.5-flash-lite. Empty disables fallback.
   max_tokens: 16000
   max_tool_calls: 8           # tool-call rounds per /ask (both providers)
   daily_ask_limit: 30

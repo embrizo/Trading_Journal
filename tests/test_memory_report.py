@@ -155,7 +155,7 @@ def test_generate_with_fake_coach(tools):
         async def narrative(self, system, payload):
             assert "weekly review" in system.lower()
             assert payload["period"]["n"] == 7
-            return "THIS WEEK: 7 trades, 1 W. ONE THING TO WATCH: FOMO 6 L.", ["99"]
+            return "THIS WEEK: 7 trades, 1 W. ONE THING TO WATCH: FOMO 6 L.", ["99"], "fake-model"
     out = asyncio.run(report.generate(tools.db, "weekly", FakeCoach(), now_ms_=NOW))
     assert "## Coach notes" in out["markdown"] and "⚠ numbers not found in the metrics: 99" in out["markdown"]
     row = tools.db.conn.execute("SELECT model, prompt_version FROM ai_analysis").fetchone()

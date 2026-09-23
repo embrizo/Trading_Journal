@@ -84,6 +84,17 @@ def _friendly(e: Exception) -> CoachError:
     return CoachError(f"coach failed: {e.__class__.__name__}: {e}")
 
 
+def _is_gemini_rate_limit(e: Exception) -> bool:
+    try:
+        from google.genai import errors as g_errors
+    except ImportError:
+        return False
+    if not isinstance(e, g_errors.ClientError):
+        return False
+    msg = str(e).lower()
+    return "429" in str(e) or "resource_exhausted" in msg
+
+
 # ── number-parity guard (deterministic, no LLM) ─────────────────────────────
 _NUM_RE = re.compile(r"(?<![\w#])[-+]?\d+(?:[.,]\d+)?%?")
 
@@ -168,6 +179,25 @@ class Coach:
         if os.environ.get("GEMINI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
             return True
         return False
+
+    async def _call_with_fallback(self, make_call, on_retry=None):
+        """Call ``make_call(model)`` with ``cfg.model``; on a Gemini 429, retry once
+        with ``cfg.fallback_model`` if one is configured. Returns (response, model_used)."""
+        model = self.cfg.model
+        try:
+            return await make_call(model), model
+        except (AskBudgetExceeded, CoachError):
+            raise
+        except Exception as e:
+            fallback = self.cfg.fallback_model
+            if not (self.is_gemini and fallback and fallback != model and _is_gemini_rate_limit(e)):
+                raise _friendly(e) from e
+            if on_retry:
+                on_retry()
+            try:
+                return await make_call(fallback), fallback
+            except Exception as e2:
+                raise _friendly(e2) from e2
 
     @property
     def client(self):
@@ -564,31 +594,30 @@ class Coach:
         self._calls = []
         user = question if signal is None else \
             f"{question}\n\nCURRENT SIGNAL:\n{json.dumps(signal, ensure_ascii=False)}"
-        try:
-            tools = self._build_gemini_tools()
+        tools = self._build_gemini_tools()
+
+        async def _call(model: str):
             chat = self.client.aio.chats.create(
-                model=self.cfg.model,
+                model=model,
                 config={
                     "tools": tools,
                     "system_instruction": prompts.COACH_V1,
                     "automatic_function_calling": {"maximum_remote_calls": self.cfg.max_tool_calls},
                 }
             )
-            resp = await chat.send_message(user)
-        except (AskBudgetExceeded, CoachError):
-            raise
-        except Exception as e:
-            raise _friendly(e) from e
+            return await chat.send_message(user)
+
+        resp, model_used = await self._call_with_fallback(_call, on_retry=self._calls.clear)
 
         text = resp.text.strip() if resp.text else ""
         usage = _usage_gemini(resp)
-        ans = CoachAnswer(text=text, tool_calls=list(self._calls), model=self.cfg.model,
+        ans = CoachAnswer(text=text, tool_calls=list(self._calls), model=model_used,
                           prompt_version=prompts.COACH_VERSION, usage=usage,
                           stop_reason=None)
         ans.unverified_numbers = parity_check(text, ans.tool_calls)
         if store:
             ans.analysis_id = self._store(
-                "suggestion", None, self.cfg.model, prompts.COACH_VERSION,
+                "suggestion", None, model_used, prompts.COACH_VERSION,
                 {"question": question, "signal": signal, "usage": usage,
                  "tool_calls": [{"name": c.name, "args": c.args, "result": c.result} for c in ans.tool_calls],
                  "unverified_numbers": ans.unverified_numbers},
@@ -683,9 +712,9 @@ class Coach:
         contents.append("REVIEW CONTEXT (JSON):\n" + json.dumps(ctx, ensure_ascii=False))
         system = prompts.REVIEW_V1 + (("\n\n" + prompts.REVIEW_VISION_ADDENDUM) if images else
                                       "\n\nNo chart screenshots were provided; leave chart_observations empty.")
-        try:
-            resp = await self.client.aio.models.generate_content(
-                model=self.cfg.model,
+        async def _call(model: str):
+            return await self.client.aio.models.generate_content(
+                model=model,
                 contents=contents,
                 config={
                     "system_instruction": system,
@@ -693,8 +722,8 @@ class Coach:
                     "response_schema": Review,
                 }
             )
-        except Exception as e:
-            raise _friendly(e) from e
+
+        resp, model_used = await self._call_with_fallback(_call)
 
         try:
             parsed = Review.model_validate_json(resp.text)
@@ -703,7 +732,7 @@ class Coach:
             out = {"error": "failed to parse structured review"}
 
         out["trade_id"] = trade_id
-        out["model"] = self.cfg.model
+        out["model"] = model_used
         out["prompt_version"] = prompts.REVIEW_VERSION
         out["images_used"] = [i["name"] for i in images]
         out["images_skipped"] = skipped
@@ -711,19 +740,19 @@ class Coach:
             " ".join(sum((out.get(k, []) for k in ("facts", "metrics", "observations")), [])),
             [ToolCall("journal_review_context", {"trade_id": trade_id}, ctx)])
         if store and "error" not in out:
-            out["analysis_id"] = self._store("review", trade_id, self.cfg.model, prompts.REVIEW_VERSION,
+            out["analysis_id"] = self._store("review", trade_id, model_used, prompts.REVIEW_VERSION,
                                              ctx, json.dumps(out, ensure_ascii=False))
             if images and out.get("chart_observations"):
                 out["vision_analysis_id"] = self._store(
-                    "vision", trade_id, self.cfg.model, prompts.REVIEW_VERSION,
+                    "vision", trade_id, model_used, prompts.REVIEW_VERSION,
                     {"images": out["images_used"], "label": "observation"},
                     json.dumps(out["chart_observations"], ensure_ascii=False))
         return out
 
     # ── narrative (weekly / monthly report) ─────────────────────────────
-    async def narrative(self, system: str, payload: dict, max_tokens: int = 4000) -> tuple[str, list[str]]:
+    async def narrative(self, system: str, payload: dict, max_tokens: int = 4000) -> tuple[str, list[str], str]:
         """One tool-less call: turn a deterministic metrics block into prose.
-        Returns (text, unverified_numbers)."""
+        Returns (text, unverified_numbers, model_used)."""
         if self.is_gemini:
             return await self._narrative_gemini(system, payload, max_tokens=max_tokens)
         try:
@@ -737,22 +766,22 @@ class Coach:
         except Exception as e:  # noqa: BLE001
             raise _friendly(e) from e
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
-        return text, parity_check(text, [ToolCall("metrics", {}, payload)])
+        return text, parity_check(text, [ToolCall("metrics", {}, payload)]), self.cfg.model
 
-    async def _narrative_gemini(self, system: str, payload: dict, max_tokens: int = 4000) -> tuple[str, list[str]]:
-        try:
-            resp = await self.client.aio.models.generate_content(
-                model=self.cfg.model,
+    async def _narrative_gemini(self, system: str, payload: dict, max_tokens: int = 4000) -> tuple[str, list[str], str]:
+        async def _call(model: str):
+            return await self.client.aio.models.generate_content(
+                model=model,
                 contents=["METRICS (JSON):\n" + json.dumps(payload, ensure_ascii=False)],
                 config={
                     "system_instruction": system,
                     "max_output_tokens": max_tokens,
                 }
             )
-        except Exception as e:
-            raise _friendly(e) from e
+
+        resp, model_used = await self._call_with_fallback(_call)
         text = (resp.text or "").strip()
-        return text, parity_check(text, [ToolCall("metrics", {}, payload)])
+        return text, parity_check(text, [ToolCall("metrics", {}, payload)]), model_used
 
 
 _IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",

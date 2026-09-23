@@ -54,6 +54,8 @@ class AiCfg(BaseModel):
     enabled: bool = False
     provider: str = "auto"           # auto | gemini | anthropic
     model: str = "claude-opus-5"     # or gemini-3.6-flash
+    fallback_model: str = ""         # Gemini only: retried once on a 429 from `model`,
+                                      # e.g. gemini-3.5-flash-lite. Empty disables fallback.
     max_tokens: int = 16000
     max_tool_calls: int = 8          # tool-runner iterations per /ask
     daily_ask_limit: int = 30

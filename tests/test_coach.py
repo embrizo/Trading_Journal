@@ -54,11 +54,12 @@ class FakeClient:
 
 
 class FakeGeminiChat:
-    def __init__(self, client, config):
-        self.client, self.config = client, config
+    def __init__(self, client, config, model):
+        self.client, self.config, self.model = client, config, model
 
     async def send_message(self, message):
         self.client.sent.append(message)
+        self.client._maybe_raise(self.model)
         by_name = {f.__name__: f for f in self.config["tools"]}
         for name, kw in self.client.script:
             await by_name[name](**kw)      # what automatic function calling does
@@ -67,24 +68,36 @@ class FakeGeminiChat:
 
 
 class FakeGemini:
-    """Pretends to be google.genai.Client (only the aio surface the coach uses)."""
+    """Pretends to be google.genai.Client (only the aio surface the coach uses).
 
-    def __init__(self, script=(), answer="", text=""):
+    ``errors``, if given, maps a model name to an exception raised the first
+    time that model is called (simulating a 429 on the primary model before a
+    fallback retry succeeds on a different one).
+    """
+
+    def __init__(self, script=(), answer="", text="", errors=None):
         self.script, self.answer, self.text = list(script), answer, text
+        self.errors = dict(errors or {})
         self.sent, self.calls = [], []
         client = self
 
         class Chats:
             def create(self, **kw):
                 client.calls.append(kw)
-                return FakeGeminiChat(client, kw["config"])
+                return FakeGeminiChat(client, kw["config"], kw["model"])
 
         class Models:
             async def generate_content(self, **kw):
                 client.calls.append(kw)
+                client._maybe_raise(kw["model"])
                 return SimpleNamespace(text=client.text, usage_metadata=None)
 
         self.aio = SimpleNamespace(chats=Chats(), models=Models())
+
+    def _maybe_raise(self, model: str) -> None:
+        exc = self.errors.pop(model, None)     # raised once per model, then clears
+        if exc is not None:
+            raise exc
 
 
 def _gemini(**kw):
@@ -340,7 +353,79 @@ def test_gemini_review_structured_and_stored(tools):
 
 def test_gemini_narrative(tools):
     fake = FakeGemini(text="3 trades this week (n=3), and a 12% edge.")
-    text, missing = asyncio.run(C.Coach(tools, _gemini(), client=fake).narrative("sys", {"n": 3}))
-    assert text.startswith("3 trades") and missing == ["12"]
+    text, missing, model = asyncio.run(C.Coach(tools, _gemini(), client=fake).narrative("sys", {"n": 3}))
+    assert text.startswith("3 trades") and missing == ["12"] and model == "gemini-3.6-flash"
     kw = fake.calls[0]
     assert kw["config"] == {"system_instruction": "sys", "max_output_tokens": 4000}
+
+
+# ── fallback model on rate limit ─────────────────────────────────────────────
+def _rate_limit_error():
+    from google.genai import errors
+    return errors.ClientError(429, {"error": {"message": "quota", "status": "RESOURCE_EXHAUSTED"}})
+
+
+def test_ask_falls_back_to_reserve_model_on_rate_limit(tools):
+    fake = FakeGemini(
+        script=[("journal_stats", {"period": "all"})], answer="3 trades (n=3).",
+        errors={"gemini-3.6-flash": _rate_limit_error()},
+    )
+    cfg = _gemini(fallback_model="gemini-3.5-flash-lite")
+    ans = asyncio.run(C.Coach(tools, cfg, client=fake).ask("how am I doing?"))
+    assert ans.model == "gemini-3.5-flash-lite"
+    assert [c.name for c in ans.tool_calls] == ["journal_stats"]     # not doubled by the retry
+    assert [kw["model"] for kw in fake.calls] == ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
+    row = tools.db.conn.execute("SELECT model FROM ai_analysis").fetchone()
+    assert row["model"] == "gemini-3.5-flash-lite"
+
+
+def test_ask_raises_when_fallback_also_rate_limited(tools):
+    fake = FakeGemini(errors={
+        "gemini-3.6-flash": _rate_limit_error(),
+        "gemini-3.5-flash-lite": _rate_limit_error(),
+    })
+    cfg = _gemini(fallback_model="gemini-3.5-flash-lite")
+    with pytest.raises(C.CoachError, match="rate limit"):
+        asyncio.run(C.Coach(tools, cfg, client=fake).ask("?"))
+
+
+def test_ask_does_not_fall_back_without_a_configured_fallback(tools):
+    fake = FakeGemini(errors={"gemini-3.6-flash": _rate_limit_error()})
+    with pytest.raises(C.CoachError, match="rate limit"):
+        asyncio.run(C.Coach(tools, _gemini(), client=fake).ask("?"))
+    assert len(fake.calls) == 1
+
+
+def test_ask_does_not_fall_back_on_a_non_rate_limit_error(tools):
+    from google.genai import errors
+    fake = FakeGemini(errors={
+        "gemini-3.6-flash": errors.ClientError(401, {"error": {"message": "bad key"}}),
+    })
+    cfg = _gemini(fallback_model="gemini-3.5-flash-lite")
+    with pytest.raises(C.CoachError, match="API key rejected"):
+        asyncio.run(C.Coach(tools, cfg, client=fake).ask("?"))
+    assert len(fake.calls) == 1     # no retry for a non-429 error
+
+
+def test_review_falls_back_to_reserve_model_on_rate_limit(tools):
+    fake = FakeGemini(text=json.dumps(_REVIEW), errors={"gemini-3.6-flash": _rate_limit_error()})
+    cfg = _gemini(fallback_model="gemini-3.5-flash-lite")
+    r = asyncio.run(C.Coach(tools, cfg, client=fake).review(1))
+    assert r["model"] == "gemini-3.5-flash-lite" and r["facts"] == _REVIEW["facts"]
+    row = tools.db.conn.execute("SELECT model FROM ai_analysis").fetchone()
+    assert row["model"] == "gemini-3.5-flash-lite"
+
+
+def test_narrative_falls_back_to_reserve_model_on_rate_limit(tools):
+    fake = FakeGemini(text="3 trades (n=3).", errors={"gemini-3.6-flash": _rate_limit_error()})
+    cfg = _gemini(fallback_model="gemini-3.5-flash-lite")
+    text, missing, model = asyncio.run(C.Coach(tools, cfg, client=fake).narrative("sys", {"n": 3}))
+    assert text == "3 trades (n=3)." and model == "gemini-3.5-flash-lite"
+
+
+def test_fallback_never_applies_to_the_anthropic_provider(tools):
+    """A fallback_model is Gemini-only; the Anthropic path must ignore it."""
+    fake = FakeClient(answer="ok")
+    cfg = AiCfg(provider="anthropic", fallback_model="gemini-3.5-flash-lite")
+    ans = asyncio.run(C.Coach(tools, cfg, client=fake).ask("?"))
+    assert ans.model == "claude-opus-5"
