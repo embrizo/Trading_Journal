@@ -12,7 +12,7 @@ that does real work.
 
 ---
 
-## Status: journal + AI coach fully built (J0–J6); Gemini wired; Telegram bot verified live (2026-09-23)
+## Status: J0–J6 built; Gemini coach and Telegram verified live; M6 backtest done (2026-09-24)
 
 Everything in [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md)
 §5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested and pushed.
@@ -39,9 +39,13 @@ Session 7 ran on a fresh clone (new machine) and closed out several live-check g
   `/ask` call succeeded a few seconds later). Confirmed `gemini-3.6-flash` is the right current
   model: Google's own 404 for the older `gemini-2.5-flash` names it as the replacement.
   Discovered `requirements-ai.txt` / `pyproject.toml`'s `[ai]` extra were missing `google-genai`
-  entirely (fixed in `b277c8e`, before this test). The Anthropic path (`/review`, report
-  narrative, and `/ask` under `ai.provider: anthropic`) remains unverified — no Anthropic key
-  used against the coach this session.
+  entirely (fixed in `b277c8e`, before this test).
+- **`/review` and the weekly narrative — verified live on Gemini** (2026-09-24, session 8),
+  against a scratch copy of the journal with one trade closed in it. The review was sound and
+  `parity_check` correctly flagged a number the model had computed itself. Fixed on the way:
+  the narrative **crashed** on `profit_factor = inf` (no losses in the period), and Gemini was
+  emitting LaTeX and 16-digit floats. **The Anthropic path (`ai.provider: anthropic`) is still
+  unverified** — no Anthropic key has ever been used against this coach.
 - OKX — still 403/DNS-blocked from this ISP too (a second, different machine). `exchange:
   binance` worked around it again; watcher, `market_snapshot` and the dashboard chart all run
   live. OKX REST + WS were verified live on 2026-09-07 from a third machine and remain the default.
@@ -121,8 +125,14 @@ python -m break_signal.journal memories list
 python -m break_signal.journal backup                     # data/backups/journal-<stamp>.db + .md
 python -m break_signal.journal ask "how are my 4H breaks?"   # needs the API key
 
-# Backtest replay — needs OKX reachable (blocked on this machine); --to-journal stores the signals
+# Backtest replay — --exchange binance works where OKX is blocked; --to-journal stores the signals
 python -m break_signal.backtest.replay --symbol SOL-USDT-SWAP --tf 1D --limit 500 --out signals.csv --to-journal
+
+# M6 hit-rate report. --days (NOT --limit) when comparing timeframes: a bar count spans a
+# different period on each. -c config.yaml uses your tuned params instead of the defaults.
+python -m break_signal.backtest.report --exchange binance \
+    --symbols "SOL-USDT-SWAP,BTC-USDT-SWAP,ETH-USDT-SWAP" --tf "1D,4H" \
+    --days 730 --rr 2 --horizon 30 --out BACKTEST_REPORT.md
 
 # Service — watchers + telegram bot + report scheduler + nightly backup + web (dashboard/webhook)
 pip install -r requirements.txt            # + requirements-ai.txt for the coach
@@ -171,12 +181,17 @@ URL will fail on push rather than diverge — repoint it with
 2. **User action: load Pine indicator on TradingView** — verify auto lines match the reference screenshot; tune `pivotLen`/`atrBreak` (M2/M3). Copy winning tuning into `config.example.yaml` `params:` for parity.
 3. **Deploy to Pi 5** — `docker compose up -d --build`; point `./data` (state dir) at an SSD/USB.
 4. ~~M6 backtest report~~ — **done 2026-09-24.** `backtest/report.py` + [`BACKTEST_REPORT.md`](BACKTEST_REPORT.md): **`--days 730`** × SOL/BTC/ETH × 1D/4H on Binance, 743 judged signals over one shared 2-year window. **The defaults are not SOL-specific** — the three markets behave alike, which was the question. The finding that matters is the **timeframe split: 1D PF 1.65–2.27 (win 45–56%, +0.35 to +0.56R) against 4H PF 0.96–1.21 (win 33–38%, −0.03 to +0.13R)**, and SOL 4H is outright negative (−5.11R over 189 signals). 4H is break-even at best before costs, which fees/funding would erase — the 4H watch was dropped on this. Caveats live in the report (neutral proxy exit, not a strategy; no costs; one regime; compare rows only when their windows match). **Use `--days`, never `--limit`, to compare timeframes** — see the code-review note in the session log.
-5. **Optional Phase 3** — FastAPI + TradingView Lightweight Charts dashboard.
-6. **(Housekeeping) push `main`** to GitHub when ready — `3590c43` is local-only.
+5. ~~Optional Phase 3 dashboard~~ — **built in J6** (aiohttp, not FastAPI: one server shared with the Pine webhook). Since 2026-09-23 it can also *write* — `web.write_token` enables a command bar taking the CLI's one-line syntax. See the J6 entry and `README.md`.
+6. ~~Push `main`~~ — long done; the repo moved to https://github.com/embrizo/Trading_Journal on 2026-09-22 and is pushed after every session.
+7. **Tighten the backtest if you lean on it further** — the exit rule is a neutral proxy, and costs are still not modelled. `--rr` / `--horizon` sweeps would show how sensitive the 1D edge is; fees + funding would show whether 4H is merely break-even or actually negative net. Neither is built.
 
 ## Session log
 
 ### Session 8 — 2026-09-24 (G: clone)
+**In one line:** pulled session 7's work (no divergence), closed the WS-silence hole, built and
+then code-reviewed the M6 backtest, verified the last two AI paths on Gemini, and dropped the
+4H watch on the evidence. 267 → **317 tests**. Everything below is pushed.
+
 - **Remaining five review findings fixed** (2026-09-24). (a) **Gap pricing**: a stop now fills at the worse of the stop and the bar's open (a stop-market order slips), a target at the limit (a limit order does not improve). Measured afterwards: **0 of 43 stop exits gapped through on crypto 1D** — 24/7 markets barely gap, so the numbers did not move. It will matter for the tokenised-equity perps (RKLB and friends), which gap around the underlying's hours. (b) **`-c/--config`**: the report can now use your tuned params, and the header always states which engine produced the signals (`strict defaults` or the config path), so it can never look like it describes a system you are not running. (c) **`closed_ts`** is now entry + `bars_held × bar_seconds(tf)` instead of the entry time, so `analytics.closed()` sequences the equity curve by when trades actually closed — this moved the max-DD column (SOL 1D 10.00 → 8.00, pooled 44.91 → 46.38). (d) Rows whose R is `None` are excluded rather than counted as judged while analytics drops them. (e) **The two "does not time out" WS tests were vacuous** — everything arrived instantly, so they could not tell a per-message deadline from one measured since connect. `FakeWS` now takes a `gap`, and the tests deliver four messages 0.1 s apart under a 0.25 s deadline. Verified by mutation: reintroducing the cumulative-deadline bug now fails the test, where before it passed.
 - **Code review of the session's own work, three findings fixed** (2026-09-24). (a) **`--limit` is a bar count, so the first M6 report compared 3 years of 1D against 6 months of 4H and pooled them** — the headline comparison was confounded with the period. Added `--days`, which converts to bars per timeframe so every row shares a window; each row now prints its own window, and rows whose sampled periods overlap by <90% are flagged and the pooled row reads "mixed". Comparability is judged on the *sampleable* range (after warm-up, before the horizon), not the raw candle range (whose padding is a fixed bar count, so 90 days on 1D but 15 on 4H) and not the span of the signals (two markets can share a window and fire months apart) — both of those cried wolf on correct runs. **Re-run fairly, the conclusion got stronger, not weaker**: 1D PF 1.65–2.27 vs 4H PF 0.96–1.21, on 189–233 signals per 4H market instead of ~50. (b) A single unavailable symbol raised out of the fetch loop and lost every market already replayed; each market is now isolated and the skipped ones are named. (c) Signals fired too close to the end of the data were scored at their interim close — near-0R by construction — which is right-censoring; they are now excluded and counted separately, and a signal that *resolved* early is still kept. 18 tests in `tests/test_backtest_report.py`.
 - **4H watch dropped** (2026-09-24) on the strength of the M6 numbers, in the local `config.yaml` (4H commented out with the reason, not deleted) **and in `config.example.yaml`, which now ships 1D only** — the multi-watch format is shown as a comment instead, so a fresh install no longer watches 4H by default. "Locked decisions" updated to match. Dropping a watch only stops alerts; the dashboard still charts any timeframe, 4H trades can still be journaled by hand, and the 4H signals already stored are untouched.
