@@ -38,6 +38,10 @@ log = logging.getLogger(__name__)
 WS_URL = os.environ.get("BINANCE_WS_URL", "wss://fstream.binance.com").rstrip("/")
 
 _MAX_BACKOFF_S = 60.0
+# Kline streams push roughly every 250 ms whether or not a trade happened, so
+# silence this long means the socket is dead even though it is still "open".
+# That is exactly how the old /ws path hid: connected, subscribed, and mute.
+IDLE_TIMEOUT_S = 60.0
 
 
 def _to_candle(k: dict) -> ClosedCandle:
@@ -67,7 +71,11 @@ async def stream_closed_candles(symbol: str, tf: str) -> AsyncIterator[ClosedCan
                 backoff = 1.0
                 log.info("subscribed %s", stream)
                 while True:
-                    raw = await ws.recv()
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=IDLE_TIMEOUT_S)
+                    except asyncio.TimeoutError:
+                        raise ConnectionError(
+                            f"silent for {IDLE_TIMEOUT_S:.0f}s — stream is dead") from None
                     msg = json.loads(raw)
                     k = msg.get("k")
                     if k and k.get("x"):

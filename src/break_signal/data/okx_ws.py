@@ -15,7 +15,10 @@ exactly once and never acts intrabar.
 
 Heartbeat: OKX drops the socket after ~30s of silence. We send the literal text
 ``"ping"`` after 20s idle and OKX replies ``"pong"`` (both plain text, not JSON).
-Disconnects reconnect with exponential backoff.
+Disconnects reconnect with exponential backoff. If even the pings stop being
+answered the socket is treated as dead after :data:`IDLE_TIMEOUT_S` and
+reconnected — a connected-but-mute stream is otherwise indistinguishable from a
+quiet market, and nothing would ever raise.
 
 Set ``OKX_WS_URL`` to use a regional host if the default is geo-blocked.
 """
@@ -25,6 +28,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import AsyncIterator
 
@@ -36,6 +40,10 @@ WS_URL = os.environ.get("OKX_WS_URL", "wss://ws.okx.com:8443/ws/v5/business")
 
 _IDLE_PING_S = 20.0   # send "ping" after this many seconds without a message
 _MAX_BACKOFF_S = 60.0
+# A ping that is never answered must not keep the loop alive forever: without
+# this the socket stays "connected" and mute, and the watcher waits for a candle
+# that will never come. Counted from the last message of ANY kind, pong included.
+IDLE_TIMEOUT_S = 90.0
 
 
 @dataclass(frozen=True)
@@ -78,13 +86,19 @@ async def stream_closed_candles(symbol: str, tf: str) -> AsyncIterator[ClosedCan
                 backoff = 1.0  # connected cleanly — reset backoff
                 log.info("subscribed %s %s", channel, symbol)
 
+                last_msg = time.monotonic()
                 while True:
                     try:
                         raw = await asyncio.wait_for(ws.recv(), timeout=_IDLE_PING_S)
                     except asyncio.TimeoutError:
+                        if time.monotonic() - last_msg > IDLE_TIMEOUT_S:
+                            raise ConnectionError(
+                                f"silent for {IDLE_TIMEOUT_S:.0f}s despite pings — "
+                                "stream is dead") from None
                         await ws.send("ping")  # keep the socket alive
                         continue
 
+                    last_msg = time.monotonic()
                     if raw == "pong":
                         continue
 
