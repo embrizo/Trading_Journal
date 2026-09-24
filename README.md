@@ -111,13 +111,19 @@ To ask whether the signals were any good, rather than just listing them:
 ```bash
 python -m break_signal.backtest.report --exchange binance \
     --symbols "SOL-USDT-SWAP,BTC-USDT-SWAP,ETH-USDT-SWAP" --tf "1D,4H" \
-    --limit 1100 --rr 2 --horizon 30 --out BACKTEST_REPORT.md
+    --days 730 --rr 2 --horizon 30 --out BACKTEST_REPORT.md
 ```
 
 Each signal is resolved against the candles that followed it — stop at the line it
 broke, target at `--rr` × that risk, closed at `--horizon` bars if neither is hit —
 and the totals come from `journal/analytics.py`, the same code the live journal
-uses. [`BACKTEST_REPORT.md`](BACKTEST_REPORT.md) is a committed run; read the
+uses. Signals too close to the end of the data to resolve are excluded and counted,
+not scored flat.
+
+**Use `--days`, not `--limit`, when comparing timeframes**: a bar count spans a
+different period on each (1100 bars is ~3 years of 1D but ~6 months of 4H), and the
+report will tell you when its rows are not comparable. Every row shows its own
+window. [`BACKTEST_REPORT.md`](BACKTEST_REPORT.md) is a committed run; read the
 caveats at the bottom of it before drawing conclusions. Quote comma lists in
 PowerShell, or it splits them into separate arguments. Add `--to-journal` to also store the signals in
 `data/journal.db` (source `backtest`) so the journal has history before your first

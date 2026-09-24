@@ -25,9 +25,11 @@ import argparse
 import asyncio
 import json
 import sys
+from datetime import datetime, timezone
 
 import aiohttp
 
+from ..config import bar_seconds
 from ..core.params import Params
 from ..core.types import Candles, Signal
 from ..journal import analytics
@@ -59,19 +61,31 @@ def _outcome_of(candles: Candles, start: int, direction: str, entry: float,
             return "target", target, i - start, False
     if last <= start:
         return "none", entry, 0, False                  # signal on the final bar
+    if last - start < horizon:
+        # Ran out of data before the horizon was up. It neither hit nor failed, so
+        # counting its interim close as an outcome would be right-censoring: those
+        # are near-0R by construction and would drag expectancy toward zero.
+        return "truncated", float(candles.close[last]), last - start, False
     return "horizon", float(candles.close[last]), last - start, False
 
 
 def evaluate(candles: Candles, signals: list[Signal], rr: float = DEFAULT_RR,
-             horizon: int = DEFAULT_HORIZON) -> list[dict]:
-    """One row per signal: how it resolved, with R from ``analytics.r_multiple``."""
+             horizon: int = DEFAULT_HORIZON) -> tuple[list[dict], int]:
+    """``(rows, unresolved)`` — one row per *judged* signal, with R from
+    ``analytics.r_multiple``, plus a count of the signals at the end of the series
+    that had too little forward data to judge. Those are excluded rather than
+    counted as flat outcomes."""
     by_ts = {int(t): i for i, t in enumerate(candles.ts)}
     rows: list[dict] = []
+    unresolved = 0
     for sig in signals:
         d = sig.to_dict()
         i = by_ts.get(iso_to_ms(d["time"]) if isinstance(d["time"], str) else int(d["time"]))
-        if i is None or i >= len(candles) - 1:
-            continue                                     # no forward data to judge it
+        if i is None:
+            continue                                     # not a candle in this series
+        if i >= len(candles) - 1:
+            unresolved += 1                              # fired on the final bar
+            continue
         direction = "LONG" if d["event"] == "break_up" else "SHORT"
         entry, line = float(d["price"]), float(d["line"])
         risk = abs(entry - line)
@@ -80,9 +94,16 @@ def evaluate(candles: Candles, signals: list[Signal], rr: float = DEFAULT_RR,
         target = entry + rr * risk if direction == "LONG" else entry - rr * risk
         kind, exit_price, bars, ambiguous = _outcome_of(
             candles, i, direction, entry, line, target, horizon)
-        if kind == "none":
+        if kind in ("none", "truncated"):
+            unresolved += 1
             continue
         r = analytics.r_multiple(direction, entry, line, exit_price)
+        if r is None:
+            # Should not happen for engine-generated signals (a break_up sits above
+            # its line), but an imported one could invert it. Counting it as judged
+            # while analytics drops it would make n disagree with the tallies.
+            unresolved += 1
+            continue
         rows.append({
             "symbol": d["symbol"], "tf": d["tf"], "time": d["time"], "event": d["event"],
             "direction": direction, "entry": entry, "line": line, "target": target,
@@ -91,7 +112,7 @@ def evaluate(candles: Candles, signals: list[Signal], rr: float = DEFAULT_RR,
             "outcome": analytics.derive_outcome(r),
             "rsi": d.get("rsi"), "atr_dist": d.get("atr_dist"), "touches": d.get("touches"),
         })
-    return rows
+    return rows, unresolved
 
 
 def as_trades(rows: list[dict]) -> list[Trade]:
@@ -110,29 +131,100 @@ def summarize(rows: list[dict]) -> dict:
     return analytics.summarize(as_trades(rows))
 
 
-def render(per_market: list[tuple[str, str, list[dict]]], rr: float, horizon: int) -> str:
-    """Markdown: one line per market, then the pooled result."""
-    out = [f"# Backtest hit-rate — target {rr:g}R, stop at the line, {horizon}-bar horizon", ""]
-    out.append("| market | signals | W/L/BE | win | avg R | total R | PF | max DD | ambig |")
-    out.append("|---|---|---|---|---|---|---|---|---|")
+def _window(rows: list[dict]) -> str:
+    """Fallback when no candle window was recorded: the span of the signals."""
+    if not rows:
+        return "–"
+    times = sorted(r["time"] for r in rows)
+    return f"{times[0][:10]} → {times[-1][:10]}"
 
-    def row(label: str, rows_: list[dict]) -> str:
+
+def candle_window(candles: Candles, warmup: int = 0, horizon: int = 0) -> tuple[int, int] | None:
+    """The period over which signals could actually be sampled: from the first bar
+    after the warm-up to the last bar that still has a full horizon behind it.
+
+    Comparability is judged on this rather than on the span of the signals, which
+    two markets can share while firing their first and last signals months apart —
+    and rather than on the raw candle range, whose warm-up padding is a fixed
+    *bar* count and so covers 90 days on 1D but 15 on 4H.
+    """
+    n = len(candles)
+    if n == 0:
+        return None
+    first = min(warmup, n - 1)
+    last = max(first, n - 1 - horizon)
+    return int(candles.ts[first]), int(candles.ts[last])
+
+
+def _fmt_window(w: tuple[int, int] | None) -> str:
+    if not w:
+        return "–"
+    def day(ms: int) -> str:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+    return f"{day(w[0])} → {day(w[1])}"
+
+
+def windows_comparable(windows: list[tuple[int, int]], min_overlap: float = 0.9) -> bool:
+    """True when every window overlaps the others by at least ``min_overlap`` of the
+    union — so a few days of padding difference does not cry wolf, but comparing
+    three years of 1D against six months of 4H does."""
+    ws = [w for w in windows if w]
+    if len(ws) < 2:
+        return True
+    lo, hi = max(w[0] for w in ws), min(w[1] for w in ws)
+    overlap = max(0, hi - lo)
+    union = max(w[1] for w in ws) - min(w[0] for w in ws)
+    return union > 0 and overlap / union >= min_overlap
+
+
+def render(per_market: list[dict], rr: float, horizon: int) -> str:
+    """Markdown: one line per market, then the pooled result.
+
+    Each row carries its own window, because a bar count covers a different span
+    on every timeframe — 1100 bars is ~3 years of 1D but ~6 months of 4H. Rows
+    whose windows differ are not comparable, and the pooled line says so.
+    """
+    out = [f"# Backtest hit-rate — target {rr:g}R, stop at the line, {horizon}-bar horizon", ""]
+    out.append("| market | window | signals | W/L/BE | win | avg R | total R | PF | max DD | ambig | unresolved |")
+    out.append("|---|---|---|---|---|---|---|---|---|---|---|")
+
+    def row(label: str, rows_: list[dict], window: str, unresolved: int) -> str:
         s = summarize(rows_)
         amb = sum(1 for r in rows_ if r["ambiguous"])
         win = "–" if s["win_rate"] is None else f"{round(s['win_rate'] * 100)}%"
-        return (f"| {label} | {s['n']} | {s['wins']}/{s['losses']}/{s['be']} | {win} | "
+        return (f"| {label} | {window} | {s['n']} | {s['wins']}/{s['losses']}/{s['be']} | {win} | "
                 f"{_n(s['avg_r'])} | {_n(s['total_r'])} | {_n(s['profit_factor'])} | "
-                f"{_n(s['max_drawdown_r'])} | {amb} |")
+                f"{_n(s['max_drawdown_r'])} | {amb} | {unresolved} |")
 
     pooled: list[dict] = []
-    for symbol, tf, rows_ in per_market:
-        out.append(row(f"{symbol} {tf}", rows_))
-        pooled += rows_
-    out.append(row("**all**", pooled))
+    unresolved_total = 0
+    windows: list[tuple[int, int]] = []
+    for m in per_market:
+        w = m.get("window")
+        label = _fmt_window(w) if w else _window(m["rows"])
+        out.append(row(f"{m['symbol']} {m['tf']}", m["rows"], label, m["unresolved"]))
+        pooled += m["rows"]
+        unresolved_total += m["unresolved"]
+        if w:
+            windows.append(w)
+    comparable = windows_comparable(windows)
+    if comparable and windows:
+        pooled_window = _fmt_window((max(w[0] for w in windows), min(w[1] for w in windows)))
+    elif comparable:
+        pooled_window = _window(pooled)
+    else:
+        pooled_window = "mixed"
+    out.append(row("**all**", pooled, pooled_window, unresolved_total))
     out.append("")
-    if pooled:
-        times = sorted(r["time"] for r in pooled)
-        out.append(f"Signals from {times[0][:10]} to {times[-1][:10]}.")
+    if not comparable:
+        out.append("> **The rows above cover different windows, so they are not directly "
+                   "comparable and the pooled row mixes periods.** A bar count spans a "
+                   "different amount of time on each timeframe; pass `--days` instead of "
+                   "`--limit` to give every timeframe the same window.")
+        out.append("")
+    if unresolved_total:
+        out.append(f"{unresolved_total} signal(s) fired too close to the end of the data to "
+                   f"resolve within {horizon} bars and are excluded rather than counted flat.")
 
     s = summarize(pooled)
     out.append(f"Pooled expectancy {_n(s['expectancy_r'])}R over {s['n']} signals "
@@ -154,8 +246,10 @@ def render(per_market: list[tuple[str, str, list[dict]]], rr: float, horizon: in
         "  gives different numbers; re-run with `--rr` / `--horizon` before leaning on any of it.",
         "- **No costs.** Fees, funding and slippage are not modelled. On a market whose PF is",
         "  near 1.0 they are enough to turn it negative.",
-        "- **One window.** These are the last few hundred bars, i.e. one regime. A run that",
-        "  looks better or worse over a shorter window usually just caught a friendlier one.",
+        "- **One window.** Each row covers the period in its window column — one regime. A",
+        "  run over a shorter window usually just caught a friendlier one, so compare rows",
+        "  only when their windows match (`--days` makes them match across timeframes;",
+        "  `--limit` does not, because a bar count spans less time on a faster timeframe).",
         "- **Sample size.** Per-market counts are in the table; treat anything under ~30",
         "  signals as indicative only.",
         "- Stop = the broken line, and a signal is judged only on candles *after* it fired, so",
@@ -172,28 +266,50 @@ def _n(x, d: int = 2) -> str:
     return f"{x:.{d}f}"
 
 
+def bars_for(tf: str, days: int, warmup: int, horizon: int) -> int:
+    """Bars needed to cover ``days`` of signals on ``tf``, plus the warm-up the
+    replay consumes before it can fire anything and the horizon the last signal
+    needs. This is what makes two timeframes comparable."""
+    return int(days * 86_400 / bar_seconds(tf)) + warmup + horizon
+
+
 async def _main(args) -> int:
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     tfs = [t.strip() for t in args.tf.split(",") if t.strip()]
     rest = data_rest(args.exchange)
-    per_market: list[tuple[str, str, list[dict]]] = []
+    per_market: list[dict] = []
+    failed: list[str] = []
 
     async with aiohttp.ClientSession() as session:
         for symbol in symbols:
             for tf in tfs:
-                candles = await rest.fetch_candles(session, symbol, tf, args.limit)
+                limit = bars_for(tf, args.days, args.warmup, args.horizon) if args.days else args.limit
+                try:
+                    candles = await rest.fetch_candles(session, symbol, tf, limit)
+                except Exception as e:  # noqa: BLE001 — one bad market must not lose the rest
+                    failed.append(f"{symbol} {tf}")
+                    print(f"{symbol} {tf}: FAILED ({e.__class__.__name__}: {e}) — skipped",
+                          file=sys.stderr)
+                    continue
                 if len(candles) < args.warmup + 5:
+                    failed.append(f"{symbol} {tf}")
                     print(f"{symbol} {tf}: only {len(candles)} candles, skipped", file=sys.stderr)
                     continue
                 signals = replay_signals(candles, Params(), tf, symbol, args.warmup)
-                rows = evaluate(candles, signals, args.rr, args.horizon)
-                per_market.append((symbol, tf, rows))
-                print(f"{symbol} {tf}: {len(candles)} candles, {len(signals)} signals, "
-                      f"{len(rows)} judged", file=sys.stderr)
+                rows, unresolved = evaluate(candles, signals, args.rr, args.horizon)
+                per_market.append({"symbol": symbol, "tf": tf, "rows": rows,
+                                   "unresolved": unresolved,
+                                   "window": candle_window(candles, args.warmup, args.horizon)})
+                print(f"{symbol} {tf}: {len(candles)} candles ({limit} asked), "
+                      f"{len(signals)} signals, {len(rows)} judged, {unresolved} unresolved",
+                      file=sys.stderr)
 
     if not per_market:
         print("nothing to report", file=sys.stderr)
         return 1
+    if failed:
+        print(f"note: {len(failed)} market(s) missing from the report: {', '.join(failed)}",
+              file=sys.stderr)
 
     text = render(per_market, args.rr, args.horizon)
     if args.out:
@@ -204,7 +320,8 @@ async def _main(args) -> int:
         print(text)
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:
-            json.dump([{"symbol": s, "tf": t, "signals": r} for s, t, r in per_market], fh, indent=1)
+            json.dump([{"symbol": m["symbol"], "tf": m["tf"], "unresolved": m["unresolved"],
+                        "signals": m["rows"]} for m in per_market], fh, indent=1)
         print(f"wrote {args.json}", file=sys.stderr)
     return 0
 
@@ -214,7 +331,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--symbols", default="SOL-USDT-SWAP,BTC-USDT-SWAP,ETH-USDT-SWAP")
     ap.add_argument("--tf", default="1D", help="comma-separated, e.g. 1D,4H")
     ap.add_argument("--exchange", default="okx", choices=["okx", "binance"])
-    ap.add_argument("--limit", type=int, default=400, help="candles per market (~12 months on 1D)")
+    ap.add_argument("--days", type=int, default=None,
+                    help="cover this many days of signals on EVERY timeframe (recommended "
+                         "when comparing timeframes; overrides --limit)")
+    ap.add_argument("--limit", type=int, default=400,
+                    help="candles per market — note this is a bar count, so it spans a "
+                         "different period on each timeframe")
     ap.add_argument("--warmup", type=int, default=60)
     ap.add_argument("--rr", type=float, default=DEFAULT_RR, help="target in R")
     ap.add_argument("--horizon", type=int, default=DEFAULT_HORIZON, help="bars to resolve a signal")
