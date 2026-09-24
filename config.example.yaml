@@ -8,16 +8,16 @@ exchange: okx                 # okx | binance — where candles come from (REST 
                               # Hosts: OKX_REST_URL / OKX_WS_URL / BINANCE_REST_URL /
                               # BINANCE_WS_URL override the defaults.
 
-# One watcher is started per (symbol, timeframe) pair.
-# On the evidence in BACKTEST_REPORT.md, 1D carried the edge (PF 1.66–2.18 across
-# SOL/BTC/ETH) while 4H was break-even before costs (PF 1.02–1.14) — so 4H is listed
-# here to show the format, not as a recommendation. Dropping a watch only stops the
-# alerts; the dashboard can still chart any timeframe.
+# One watcher is started per (symbol, timeframe) pair. Add a line per pair:
+#   - symbol: BTC-USDT-SWAP
+#     timeframe: "1D"
+# 1D only by default. Over 2023-12 → 2026-09 on SOL/BTC/ETH, 1D carried the edge
+# (PF 1.66–2.18) while 4H was break-even before costs (PF 1.02–1.14) — see
+# BACKTEST_REPORT.md. Watching a timeframe only controls alerts; the dashboard
+# charts any timeframe regardless.
 watches:
   - symbol: SOL-USDT-SWAP     # OKX instId (perpetual)
     timeframe: "1D"           # OKX bar: 1D, 4H, 1H, 12H, ...
-  - symbol: SOL-USDT-SWAP
-    timeframe: "4H"
 
 # ── Algorithm parameters (STRICT defaults, must mirror pine/break_signal.pine) ──
 params:
