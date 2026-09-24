@@ -128,6 +128,18 @@ def test_parity_check_flags_invented_numbers():
     assert missing == ["1.9", "12"]
 
 
+def test_parity_check_survives_infinite_metrics():
+    """profit_factor is inf when a period has no losses — round()/int() raise on it,
+    which crashed the weekly narrative outright."""
+    inf, nan = float("inf"), float("nan")
+    tc = C.ToolCall("metrics", {}, {"n": 1, "wins": 1, "losses": 0,
+                                    "profit_factor": inf, "avg_loss_r": nan,
+                                    "nested": [{"pf": -inf}], "total_r": 0.89})
+    assert C.parity_check("1 trade, 1 win, +0.89R, PF inf", [tc]) == []
+    # a real invention is still caught alongside the infinities
+    assert C.parity_check("PF inf but expectancy 2.5R", [tc]) == ["2.5"]
+
+
 def test_chunk_prefers_paragraph_breaks():
     text = "a" * 3000 + "\n" + "b" * 3000
     parts = C.chunk(text, 4000)

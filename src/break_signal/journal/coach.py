@@ -11,6 +11,7 @@ imports it lazily so the rest of the journal works without it.
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -106,6 +107,11 @@ def _numbers_in_results(obj: Any, out: set[str]) -> None:
         return
     if isinstance(obj, (int, float)):
         f = float(obj)
+        if not math.isfinite(f):
+            # profit_factor is inf when a period has no losses (and nan is possible
+            # from an empty stat). There is no digit spelling a reply could quote,
+            # and round()/int() raise on both — so there is nothing to record.
+            return
         cands = {f, round(f), round(f, 1), round(f, 2)}
         if 0 <= f <= 1:
             cands |= {round(f * 100), round(f * 100, 1)}
@@ -128,6 +134,8 @@ def _norm(x: Any) -> str:
         f = float(s)
     except ValueError:
         return s
+    if not math.isfinite(f):
+        return s                       # "inf" / "nan": int() and round() raise on these
     return str(int(f)) if f == int(f) else repr(round(f, 4))
 
 
