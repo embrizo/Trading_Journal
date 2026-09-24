@@ -1,7 +1,9 @@
 # Claude handoff — Break Signal
 
-**Last Updated:** 2026-09-23 (session 7)
-**Workspace:** `D:\etc\Program\7Days\Trading_Journal` (fresh clone this session; prior sessions were on `G:\7Days\Trading_Journal`)
+**Last Updated:** 2026-09-24 (session 8)
+**Workspace:** two clones exist — `D:\etc\Program\7Days\Trading_Journal` (session 7) and
+`G:\7Days\Trading_Journal` (sessions 1–6 and 8). Neither is canonical; the remote is.
+Pull before working, and check `git status` in the *other* clone before assuming it is idle.
 **Repo:** https://github.com/embrizo/Trading_Journal (`main`) — the old `Break_Signal` remote is archived
 **Primary Language/Runtime:** Python 3.11+ (asyncio); Pine Script v6 (Phase 1)
 
@@ -173,6 +175,11 @@ URL will fail on push rather than diverge — repoint it with
 6. **(Housekeeping) push `main`** to GitHub when ready — `3590c43` is local-only.
 
 ## Session log
+
+### Session 8 — 2026-09-24 (G: clone)
+- User asked to reconcile "two versions". There were none: the G: clone was **7 behind, 0 ahead**, working tree clean, so `git pull --ff-only` fast-forwarded to `d10fbf3` with nothing to merge. Its local `config.yaml` already carried both sides (`exchange: binance` from session 6, `ai.provider: gemini` since). 285 tests pass on the merged state.
+- **Measured the `/ws` vs `/market/ws` question, settling it**: on `wss://fstream.binance.com`, `/market/ws/solusdt@kline_1m` gave 27 messages and a real closed candle in 29 s; the legacy `/ws/solusdt@kline_1m` gave **0 messages in 84 s with no error at all**. Session 7's fix (`e2f48ac`) is correct. Session 6's "Binance WS verified live" was wrong — it only ever saw the `subscribed` log line, which proves a socket opened, not that anything arrives. **A stream is only verified when a message has been received; a connection log is not evidence.**
+- Checked the configured Gemini model against the key: `client.models.list()` returns 44 usable models and `gemini-3.5-flash` is among them, so the local config is valid (3.6/3.7/3.8 flash also exist). `ai.fallback_model` is still empty — worth setting to a lite model now that `d10fbf3` retries a 429 with it, since session 7 hit free-tier 429s.
 
 ### Session 7 — 2026-09-23
 - Fresh clone on a new machine (`D:\etc\Program\7Days\Trading_Journal`). `git clone` (the folder
