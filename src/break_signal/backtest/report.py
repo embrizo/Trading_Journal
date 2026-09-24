@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 import aiohttp
 
-from ..config import bar_seconds
+from ..config import bar_seconds, load_config
 from ..core.params import Params
 from ..core.types import Candles, Signal
 from ..journal import analytics
@@ -48,15 +48,21 @@ def _outcome_of(candles: Candles, start: int, direction: str, entry: float,
     n = len(candles)
     last = min(start + horizon, n - 1)
     for i in range(start + 1, last + 1):
-        hi, lo = float(candles.high[i]), float(candles.low[i])
+        hi, lo, op = float(candles.high[i]), float(candles.low[i]), float(candles.open[i])
         if direction == "LONG":
             hit_t, hit_s = hi >= target, lo <= stop
+            # A stop is a stop-market order: a bar that opens through it fills at
+            # the open, not at the stop, so a gap costs more than 1R. A target is a
+            # limit order: it fills at the limit and a favourable gap is not
+            # credited. Pricing both exactly would make every loss exactly -1R.
+            fill_s = min(op, stop)
         else:
             hit_t, hit_s = lo <= target, hi >= stop
+            fill_s = max(op, stop)
         if hit_t and hit_s:
-            return "stop", stop, i - start, True        # unknowable order → pessimistic
+            return "stop", fill_s, i - start, True      # unknowable order → pessimistic
         if hit_s:
-            return "stop", stop, i - start, False
+            return "stop", fill_s, i - start, False
         if hit_t:
             return "target", target, i - start, False
     if last <= start:
@@ -115,6 +121,18 @@ def evaluate(candles: Candles, signals: list[Signal], rr: float = DEFAULT_RR,
     return rows, unresolved
 
 
+def _exit_ts(row: dict) -> int:
+    """When the trade actually closed. ``analytics.closed()`` orders by ``closed_ts``
+    to build the equity curve, so using the entry time would sequence a signal that
+    ran 30 bars before one that stopped out the next day — a drawdown over an order
+    that never happened."""
+    opened = iso_to_ms(row["time"])
+    try:
+        return opened + row["bars_held"] * bar_seconds(row["tf"]) * 1000
+    except (ValueError, TypeError):
+        return opened                      # unknown bar string: no better estimate
+
+
 def as_trades(rows: list[dict]) -> list[Trade]:
     """Synthetic closed trades so ``analytics`` produces every statistic."""
     return [
@@ -122,7 +140,7 @@ def as_trades(rows: list[dict]) -> list[Trade]:
               created_ts=0, updated_ts=0, tf=r["tf"], entry_price=r["entry"],
               sl_price=r["line"], exit_price=r["exit"], outcome=r["outcome"],
               r_multiple=r["r_multiple"], opened_ts=iso_to_ms(r["time"]),
-              closed_ts=iso_to_ms(r["time"]))
+              closed_ts=_exit_ts(r))
         for i, r in enumerate(rows)
     ]
 
@@ -177,14 +195,17 @@ def windows_comparable(windows: list[tuple[int, int]], min_overlap: float = 0.9)
     return union > 0 and overlap / union >= min_overlap
 
 
-def render(per_market: list[dict], rr: float, horizon: int) -> str:
+def render(per_market: list[dict], rr: float, horizon: int,
+           params_label: str = "strict defaults") -> str:
     """Markdown: one line per market, then the pooled result.
 
     Each row carries its own window, because a bar count covers a different span
     on every timeframe — 1100 bars is ~3 years of 1D but ~6 months of 4H. Rows
     whose windows differ are not comparable, and the pooled line says so.
     """
-    out = [f"# Backtest hit-rate — target {rr:g}R, stop at the line, {horizon}-bar horizon", ""]
+    out = [f"# Backtest hit-rate — target {rr:g}R, stop at the line, {horizon}-bar horizon", "",
+           f"Signals generated with **{params_label}**; a stop fills at the worse of the "
+           f"stop and the bar's open, a target at the limit.", ""]
     out.append("| market | window | signals | W/L/BE | win | avg R | total R | PF | max DD | ambig | unresolved |")
     out.append("|---|---|---|---|---|---|---|---|---|---|---|")
 
@@ -252,6 +273,9 @@ def render(per_market: list[dict], rr: float, horizon: int) -> str:
         "  `--limit` does not, because a bar count spans less time on a faster timeframe).",
         "- **Sample size.** Per-market counts are in the table; treat anything under ~30",
         "  signals as indicative only.",
+        "- **Engine parameters.** The header says which produced these signals. Without",
+        "  `--config` they are the strict library defaults, not whatever your config.yaml",
+        "  tunes, so the report would describe a system you are not running.",
         "- Stop = the broken line, and a signal is judged only on candles *after* it fired, so",
         "  there is no look-ahead. Every statistic comes from `journal/analytics.py`.",
     ]
@@ -273,10 +297,23 @@ def bars_for(tf: str, days: int, warmup: int, horizon: int) -> int:
     return int(days * 86_400 / bar_seconds(tf)) + warmup + horizon
 
 
+def load_params(config_path: str | None) -> tuple[Params, str, str | None]:
+    """``(params, label, exchange)``. Without a config this is the strict library
+    default, which is then what the report says — the numbers must never look like
+    they describe the tuned engine the reader is running when they do not."""
+    if not config_path:
+        return Params(), "strict defaults", None
+    cfg = load_config(config_path)
+    params = cfg.to_params()
+    label = f"{config_path}" if params != Params() else f"{config_path} (= strict defaults)"
+    return params, label, cfg.exchange
+
+
 async def _main(args) -> int:
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     tfs = [t.strip() for t in args.tf.split(",") if t.strip()]
-    rest = data_rest(args.exchange)
+    params, params_label, cfg_exchange = load_params(args.config)
+    rest = data_rest(args.exchange or cfg_exchange or "okx")
     per_market: list[dict] = []
     failed: list[str] = []
 
@@ -295,7 +332,7 @@ async def _main(args) -> int:
                     failed.append(f"{symbol} {tf}")
                     print(f"{symbol} {tf}: only {len(candles)} candles, skipped", file=sys.stderr)
                     continue
-                signals = replay_signals(candles, Params(), tf, symbol, args.warmup)
+                signals = replay_signals(candles, params, tf, symbol, args.warmup)
                 rows, unresolved = evaluate(candles, signals, args.rr, args.horizon)
                 per_market.append({"symbol": symbol, "tf": tf, "rows": rows,
                                    "unresolved": unresolved,
@@ -311,7 +348,7 @@ async def _main(args) -> int:
         print(f"note: {len(failed)} market(s) missing from the report: {', '.join(failed)}",
               file=sys.stderr)
 
-    text = render(per_market, args.rr, args.horizon)
+    text = render(per_market, args.rr, args.horizon, params_label)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(text + "\n")
@@ -330,7 +367,11 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--symbols", default="SOL-USDT-SWAP,BTC-USDT-SWAP,ETH-USDT-SWAP")
     ap.add_argument("--tf", default="1D", help="comma-separated, e.g. 1D,4H")
-    ap.add_argument("--exchange", default="okx", choices=["okx", "binance"])
+    ap.add_argument("-c", "--config", default=None,
+                    help="config.yaml to take the engine params (and exchange) from; "
+                         "without it the strict library defaults are used and the report says so")
+    ap.add_argument("--exchange", default=None, choices=["okx", "binance"],
+                    help="overrides the config's exchange (default okx)")
     ap.add_argument("--days", type=int, default=None,
                     help="cover this many days of signals on EVERY timeframe (recommended "
                          "when comparing timeframes; overrides --limit)")

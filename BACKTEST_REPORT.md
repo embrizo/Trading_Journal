@@ -1,14 +1,16 @@
 # Backtest hit-rate — target 2R, stop at the line, 30-bar horizon
 
+Signals generated with **strict defaults**; a stop fills at the worse of the stop and the bar's open, a target at the limit.
+
 | market | window | signals | W/L/BE | win | avg R | total R | PF | max DD | ambig | unresolved |
 |---|---|---|---|---|---|---|---|---|---|---|
-| SOL-USDT-SWAP 1D | 2024-08-25 → 2026-08-24 | 31 | 14/17/0 | 45% | 0.35 | 11.00 | 1.65 | 10.00 | 1 | 1 |
+| SOL-USDT-SWAP 1D | 2024-08-25 → 2026-08-24 | 31 | 14/17/0 | 45% | 0.35 | 11.00 | 1.65 | 8.00 | 1 | 1 |
 | SOL-USDT-SWAP 4H | 2024-09-19 → 2026-09-19 | 189 | 62/127/0 | 33% | -0.03 | -5.11 | 0.96 | 21.15 | 7 | 0 |
-| BTC-USDT-SWAP 1D | 2024-08-25 → 2026-08-24 | 25 | 14/11/0 | 56% | 0.56 | 13.98 | 2.27 | 6.00 | 0 | 0 |
+| BTC-USDT-SWAP 1D | 2024-08-25 → 2026-08-24 | 25 | 14/11/0 | 56% | 0.56 | 13.98 | 2.27 | 6.58 | 0 | 0 |
 | BTC-USDT-SWAP 4H | 2024-09-19 → 2026-09-19 | 231 | 88/143/0 | 38% | 0.13 | 29.45 | 1.21 | 27.20 | 4 | 2 |
-| ETH-USDT-SWAP 1D | 2024-08-25 → 2026-08-24 | 34 | 19/15/0 | 56% | 0.53 | 18.09 | 2.21 | 3.00 | 1 | 0 |
+| ETH-USDT-SWAP 1D | 2024-08-25 → 2026-08-24 | 34 | 19/15/0 | 56% | 0.53 | 18.09 | 2.21 | 4.00 | 1 | 0 |
 | ETH-USDT-SWAP 4H | 2024-09-19 → 2026-09-19 | 233 | 88/145/0 | 38% | 0.08 | 18.43 | 1.13 | 17.47 | 6 | 0 |
-| **all** | 2024-09-19 → 2026-08-24 | 743 | 285/458/0 | 38% | 0.12 | 85.84 | 1.19 | 44.91 | 19 | 3 |
+| **all** | 2024-09-19 → 2026-08-24 | 743 | 285/458/0 | 38% | 0.12 | 85.84 | 1.19 | 46.38 | 19 | 3 |
 
 3 signal(s) fired too close to the end of the data to resolve within 30 bars and are excluded rather than counted flat.
 Pooled expectancy 0.12R over 743 signals (avg win 1.90R, avg loss -0.99R).
@@ -28,5 +30,8 @@ Exits: horizon 30, stop 452, target 261.
   `--limit` does not, because a bar count spans less time on a faster timeframe).
 - **Sample size.** Per-market counts are in the table; treat anything under ~30
   signals as indicative only.
+- **Engine parameters.** The header says which produced these signals. Without
+  `--config` they are the strict library defaults, not whatever your config.yaml
+  tunes, so the report would describe a system you are not running.
 - Stop = the broken line, and a signal is judged only on candles *after* it fired, so
   there is no look-ahead. Every statistic comes from `journal/analytics.py`.

@@ -7,18 +7,24 @@ import numpy as np
 import pytest
 
 from break_signal.backtest import report as R
+from break_signal.core.params import Params
 from break_signal.core.types import Candles, Signal
 from break_signal.journal import analytics
+from break_signal.journal.db import iso_to_ms
 
 DAY = 86_400_000
 
 
 def _candles(bars):
-    """bars: list of (high, low, close). Open/volume are filler."""
+    """bars: (high, low, close) or (high, low, close, open).
+
+    The open matters for gap pricing, so it can be given explicitly; it defaults to
+    the close, which means no gap.
+    """
     n = len(bars)
     return Candles(
         ts=np.arange(n, dtype=np.int64) * DAY,
-        open=np.array([b[2] for b in bars], dtype=float),
+        open=np.array([b[3] if len(b) > 3 else b[2] for b in bars], dtype=float),
         high=np.array([b[0] for b in bars], dtype=float),
         low=np.array([b[1] for b in bars], dtype=float),
         close=np.array([b[2] for b in bars], dtype=float),
@@ -70,6 +76,39 @@ def test_unresolved_is_closed_at_the_horizon():
     assert r["exit_kind"] == "horizon" and r["bars_held"] == 3
     assert r["exit"] == pytest.approx(111.0)
     assert r["r_multiple"] == pytest.approx(0.1)          # (111-110)/10
+
+
+def test_a_gap_through_the_stop_costs_more_than_one_r():
+    """A stop is a stop-market order. Pricing it exactly would make every loss
+    -1.00R however violently the market gapped."""
+    # entry 110, line 100 -> risk 10. Next bar OPENS at 85, far below the stop.
+    bars = [(110, 109, 110), (86, 80, 82, 85)]             # high, low, close, open
+    rows, _ = _eval(bars, [_sig(0)])
+    assert rows[0]["exit_kind"] == "stop"
+    assert rows[0]["exit"] == pytest.approx(85.0)          # the open, not the stop
+    assert rows[0]["r_multiple"] == pytest.approx(-2.5)
+
+
+def test_a_normal_stop_touch_still_fills_at_the_stop():
+    bars = [(110, 109, 110), (112, 99, 101, 111)]          # opens above the stop
+    rows, _ = _eval(bars, [_sig(0)])
+    assert rows[0]["exit"] == pytest.approx(100.0) and rows[0]["r_multiple"] == pytest.approx(-1.0)
+
+
+def test_a_favourable_gap_through_the_target_is_not_credited():
+    """A take-profit is a limit order: it fills at the limit, never better."""
+    bars = [(110, 109, 110), (150, 140, 145, 142)]         # opens above the 130 target
+    rows, _ = _eval(bars, [_sig(0)])
+    assert rows[0]["exit_kind"] == "target"
+    assert rows[0]["exit"] == pytest.approx(130.0) and rows[0]["r_multiple"] == pytest.approx(2.0)
+
+
+def test_short_gap_through_the_stop_is_mirrored():
+    # break_down: entry 90, line 100 -> risk 10; next bar opens at 115, above the stop
+    bars = [(91, 89, 90), (120, 114, 118, 115)]
+    rows, _ = _eval(bars, [_sig(0, event="break_down", price=90.0, line=100.0)])
+    assert rows[0]["exit"] == pytest.approx(115.0)
+    assert rows[0]["r_multiple"] == pytest.approx(-2.5)
 
 
 def test_same_bar_target_and_stop_counts_as_a_loss_and_is_flagged():
@@ -205,6 +244,55 @@ def test_unresolved_signals_are_reported_not_hidden():
     text = R.render([_market("SOL-USDT-SWAP", "1D", rows, unresolved)], 2.0, 10)
     assert unresolved == 1
     assert "fired too close to the end of the data" in text
+
+
+def test_exit_time_is_when_the_trade_closed_not_when_it_opened():
+    """analytics.closed() sequences the equity curve by closed_ts, so a signal that
+    ran 30 bars must not be applied before one that stopped out the next day."""
+    slow = {"time": "2026-01-01T00:00:00Z", "tf": "1D", "bars_held": 30}
+    fast = {"time": "2026-01-05T00:00:00Z", "tf": "1D", "bars_held": 1}
+    assert R._exit_ts(slow) > R._exit_ts(fast)             # fast closes first
+    assert R._exit_ts(fast) - R._exit_ts({**fast, "bars_held": 0}) == 86_400_000
+    assert R._exit_ts({**fast, "tf": "4H"}) - iso_to_ms(fast["time"]) == 4 * 3_600_000
+    # an unknown bar string must not blow up
+    assert R._exit_ts({**fast, "tf": "7Y"}) == iso_to_ms(fast["time"])
+
+
+def test_synthetic_trades_close_when_they_actually_closed():
+    bars = ([(110, 109, 110)] + [(112, 108, 111)] * 3 + [(131, 118, 130)]   # slow: 4 bars
+            + [(110, 109, 110)] + [(113, 99, 101)])                        # fast: 1 bar
+    rows, _ = _eval(bars, [_sig(0), _sig(5)], horizon=4)
+    trades = analytics.closed(R.as_trades(rows))
+    assert [r["bars_held"] for r in rows] == [4, 1]
+    for t, r in zip(sorted(trades, key=lambda x: x.opened_ts), rows):
+        assert t.closed_ts == t.opened_ts + r["bars_held"] * DAY
+        assert t.closed_ts > t.opened_ts                  # never closes at its own entry
+
+
+# ── engine params are disclosed ──────────────────────────────────────────────
+def test_params_default_to_strict_and_the_report_says_so():
+    params, label, exchange = R.load_params(None)
+    assert params == Params() and label == "strict defaults" and exchange is None
+    text = R.render([_market("SOL", "1D", [])], 2.0, 30, label)
+    assert "strict defaults" in text
+
+
+def test_params_can_come_from_a_config_and_are_named_in_the_report(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "exchange: binance\n"
+        "watches:\n  - symbol: SOL-USDT-SWAP\n    timeframe: \"1D\"\n"
+        "params:\n  atr_break: 0.75\n  min_touches: 4\n", encoding="utf-8")
+    params, label, exchange = R.load_params(str(cfg))
+    assert params.atr_break == 0.75 and params.min_touches == 4
+    assert params != Params() and exchange == "binance"
+    text = R.render([_market("SOL", "1D", [])], 2.0, 30, label)
+    assert str(cfg) in text and "(= strict defaults)" not in text
+    # a config that happens to match the defaults says so rather than implying tuning
+    plain = tmp_path / "plain.yaml"
+    plain.write_text("watches:\n  - symbol: SOL-USDT-SWAP\n    timeframe: \"1D\"\n", encoding="utf-8")
+    _, plain_label, _ = R.load_params(str(plain))
+    assert "(= strict defaults)" in plain_label
 
 
 def test_bars_for_gives_each_timeframe_the_same_span():

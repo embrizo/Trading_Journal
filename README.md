@@ -123,7 +123,10 @@ not scored flat.
 **Use `--days`, not `--limit`, when comparing timeframes**: a bar count spans a
 different period on each (1100 bars is ~3 years of 1D but ~6 months of 4H), and the
 report will tell you when its rows are not comparable. Every row shows its own
-window. [`BACKTEST_REPORT.md`](BACKTEST_REPORT.md) is a committed run; read the
+window. Without `-c config.yaml` the signals come from the strict library defaults
+rather than your tuning, and the report's header says which it used. A stop is
+priced at the worse of the stop and the bar's open (a stop-market order slips
+through a gap); a target fills at the limit. [`BACKTEST_REPORT.md`](BACKTEST_REPORT.md) is a committed run; read the
 caveats at the bottom of it before drawing conclusions. Quote comma lists in
 PowerShell, or it splits them into separate arguments. Add `--to-journal` to also store the signals in
 `data/journal.db` (source `backtest`) so the journal has history before your first
