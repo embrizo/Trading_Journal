@@ -170,7 +170,7 @@ URL will fail on push rather than diverge — repoint it with
 1. **Discord webhook** — same pattern as Telegram: `channels.discord.enabled: true` + `webhook_url` from a channel's Integrations → Webhooks, then confirm a real break posts. Not yet done; Telegram is verified, Discord isn't. Completes M5 once both are live. *(REST + WS data paths already verified live 2026-09-07.)*
 2. **User action: load Pine indicator on TradingView** — verify auto lines match the reference screenshot; tune `pivotLen`/`atrBreak` (M2/M3). Copy winning tuning into `config.example.yaml` `params:` for parity.
 3. **Deploy to Pi 5** — `docker compose up -d --build`; point `./data` (state dir) at an SSD/USB.
-4. **M6 backtest report** — extend `replay.py` output into a hit-rate summary over ~12 months across SOL + BTC + ETH to check the strict defaults don't overfit SOL.
+4. ~~M6 backtest report~~ — **done 2026-09-24.** `backtest/report.py` + [`BACKTEST_REPORT.md`](BACKTEST_REPORT.md) (1100 bars × SOL/BTC/ETH × 1D/4H on Binance, 2023-12 → 2026-09, 262 signals). **The defaults are not SOL-specific** — the three markets behave alike, which was the question. The finding that matters instead is the **timeframe split: 1D PF 1.66–2.18 (win 47–54%, +0.35 to +0.51R), 4H PF 1.02–1.14 (win ~36%, +0.01 to +0.09R)** on every market. 4H is break-even before costs, which fees/funding would erase; consider dropping the 4H watch, or tuning it separately, once there is live evidence. Caveats live in the report itself (it is a neutral proxy exit, not a strategy; no costs; one regime; ~30 signals per market on 1D).
 5. **Optional Phase 3** — FastAPI + TradingView Lightweight Charts dashboard.
 6. **(Housekeeping) push `main`** to GitHub when ready — `3590c43` is local-only.
 

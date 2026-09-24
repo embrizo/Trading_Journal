@@ -104,7 +104,22 @@ python -m break_signal.backtest.replay --symbol SOL-USDT-SWAP --tf 1D --limit 50
 ```
 
 Walks a growing window so each bar sees only past data — no look-ahead, same
-pivot-confirmation lag as live. Add `--to-journal` to also store the signals in
+pivot-confirmation lag as live.
+
+To ask whether the signals were any good, rather than just listing them:
+
+```bash
+python -m break_signal.backtest.report --exchange binance \
+    --symbols "SOL-USDT-SWAP,BTC-USDT-SWAP,ETH-USDT-SWAP" --tf "1D,4H" \
+    --limit 1100 --rr 2 --horizon 30 --out BACKTEST_REPORT.md
+```
+
+Each signal is resolved against the candles that followed it — stop at the line it
+broke, target at `--rr` × that risk, closed at `--horizon` bars if neither is hit —
+and the totals come from `journal/analytics.py`, the same code the live journal
+uses. [`BACKTEST_REPORT.md`](BACKTEST_REPORT.md) is a committed run; read the
+caveats at the bottom of it before drawing conclusions. Quote comma lists in
+PowerShell, or it splits them into separate arguments. Add `--to-journal` to also store the signals in
 `data/journal.db` (source `backtest`) so the journal has history before your first
 trade; `python -m break_signal.journal import-signals signals.csv` does the same
 for an existing CSV.
