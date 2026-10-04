@@ -73,7 +73,7 @@ class WebCfg(BaseModel):
     write_token: str = ""     # set to enable /api/do (log/close/edit from the page).
                               # Empty = the dashboard stays read-only. Sent as
                               # X-Journal-Token; reads are unaffected either way.
-    watchlist_poll_seconds: int = 15   # how often the live-price feed polls OKX
+    watchlist_poll_seconds: int = 5    # how often the live-price feed polls OKX
                                        # tickers for the watchlist + price alerts
 
 

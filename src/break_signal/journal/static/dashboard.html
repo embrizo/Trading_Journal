@@ -309,6 +309,7 @@ function wireWrites(cfg) {
 
 // ── watchlist + price alerts ─────────────────────────────────────────────────
 let wlPrices = {};
+let wlPollSeconds = 5;   // refresh cadence, taken from the server's config
 async function postJSON(url, body) {
   let token = store.get() || askToken();
   if (!token) { say('no token — writes refused', 'err'); return null; }
@@ -341,6 +342,7 @@ function alRow(a) {
 async function loadWatchlist() {
   let d; try { d = await j('/api/watchlist'); } catch { return; }
   wlPrices = d.prices || {};
+  if (d.poll_seconds) wlPollSeconds = d.poll_seconds;
   const syms = d.symbols || [];
   $('#watchlist').innerHTML = syms.length
     ? `<table><tr><th>symbol</th><th style="text-align:right">price</th><th style="text-align:right">24h</th><th></th></tr>${syms.map(wlRow).join('')}</table>`
@@ -404,8 +406,8 @@ function wireWatchlist() {
   $('#symbol').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); loadChart(); } });
   $('#symbol').addEventListener('change', loadChart);
   await Promise.all([loadPanels(), loadChart(), loadWatchlist()]);
-  // live-ish refresh of the watchlist prices + alert states
-  setInterval(loadWatchlist, 15000);
+  // live-ish refresh of the watchlist prices + alert states (server-configured)
+  setInterval(loadWatchlist, Math.max(2, wlPollSeconds) * 1000);
 })();
 </script>
 </body>
