@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Break Signal — journal</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAzMiAzMic+PHJlY3Qgd2lkdGg9JzMyJyBoZWlnaHQ9JzMyJyByeD0nNycgZmlsbD0nIzE3MWEyMScvPjxsaW5lIHgxPSc1JyB5MT0nMTgnIHgyPScyNycgeTI9JzE4JyBzdHJva2U9JyNlOWM0NmEnIHN0cm9rZS13aWR0aD0nMicgc3Ryb2tlLWRhc2hhcnJheT0nMyAzJyBzdHJva2UtbGluZWNhcD0ncm91bmQnLz48cGF0aCBkPSdNMTYgMjcgTDE2IDgnIHN0cm9rZT0nIzJhOWQ4Zicgc3Ryb2tlLXdpZHRoPSczJyBzdHJva2UtbGluZWNhcD0ncm91bmQnLz48cGF0aCBkPSdNOSAxNSBMMTYgNyBMMjMgMTUnIGZpbGw9J25vbmUnIHN0cm9rZT0nIzJhOWQ4Zicgc3Ryb2tlLXdpZHRoPSczJyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48L3N2Zz4=">
+<link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAzMiAzMic+PHJlY3Qgd2lkdGg9JzMyJyBoZWlnaHQ9JzMyJyByeD0nNycgZmlsbD0nIzE3MWEyMScvPjxsaW5lIHgxPSc1JyB5MT0nMTgnIHgyPScyNycgeTI9JzE4JyBzdHJva2U9JyNlOWM0NmEnIHN0cm9rZS13aWR0aD0nMicgc3Ryb2tlLWRhc2hhcnJheT0nMyAzJyBzdHJva2UtbGluZWNhcD0ncm91bmQnLz48cGF0aCBkPSdNMTYgMjcgTDE2IDgnIHN0cm9rZT0nIzJhOWQ4Zicgc3Ryb2tlLXdpZHRoPSczJyBzdHJva2UtbGluZWNhcD0ncm91bmQnLz48cGF0aCBkPSdNOSAxNSBMMTYgNyBMMjMgMTUnIGZpbGw9J25vbmUnIHN0cm9rZT0nIzJhOWQ4Zicgc3Ryb2tlLXdpZHRoPSczJyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48L3N2Zz4=">
+
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   :root { --bg:#0f1115; --panel:#171a21; --line:#262a33; --fg:#d7dae0; --muted:#8b91a0;
@@ -51,7 +54,14 @@
 </head>
 <body>
 <header>
-  <h1>Break Signal · journal</h1>
+  <h1 style="display:flex;align-items:center;gap:8px">
+    <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true" style="flex:none">
+      <rect width="32" height="32" rx="7" fill="#171a21"/>
+      <line x1="5" y1="18" x2="27" y2="18" stroke="#e9c46a" stroke-width="2" stroke-dasharray="3 3" stroke-linecap="round"/>
+      <path d="M16 27 L16 8" stroke="#2a9d8f" stroke-width="3" stroke-linecap="round"/>
+      <path d="M9 15 L16 7 L23 15" fill="none" stroke="#2a9d8f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    Break Signal · journal</h1>
   <input id="symbol" list="symbol-list" placeholder="e.g. BTC" autocomplete="off"
          style="text-transform:uppercase; width:160px; background:var(--panel); color:var(--fg);
                 border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit">
