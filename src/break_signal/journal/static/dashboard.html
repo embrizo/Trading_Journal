@@ -88,6 +88,29 @@
     <div class="panel"><h2>Recent trades</h2><div class="scroll" id="trades"></div></div>
   </div>
   <div class="stack">
+    <div class="panel">
+      <h2>Watchlist <span id="wl-updated" class="muted" style="text-transform:none;letter-spacing:0;font-weight:400;font-size:11px"></span></h2>
+      <div id="wl-add" style="display:none; gap:6px; margin-bottom:8px">
+        <input id="wl-sym" placeholder="SYMBOL e.g. DOGE-USDT-SWAP" autocomplete="off"
+               style="flex:1;min-width:0;text-transform:uppercase;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit">
+        <button id="wl-addbtn" class="btn-xs">add</button>
+      </div>
+      <div class="scroll" id="watchlist"></div>
+    </div>
+    <div class="panel">
+      <h2>Price alerts <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400;font-size:11px">· one-shot → Telegram</span></h2>
+      <div id="al-add" style="display:none; flex-wrap:wrap; gap:6px; margin-bottom:8px">
+        <input id="al-sym" placeholder="SYMBOL"
+               style="width:150px;text-transform:uppercase;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit">
+        <select id="al-op"><option value="&gt;=">≥</option><option value="&lt;=">≤</option></select>
+        <input id="al-price" type="number" step="any" placeholder="price"
+               style="width:100px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit">
+        <input id="al-note" placeholder="note (optional)"
+               style="flex:1;min-width:120px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit">
+        <button id="al-addbtn" class="btn-xs">add alert</button>
+      </div>
+      <div class="scroll" id="alerts"></div>
+    </div>
     <div class="panel"><h2>All time</h2><div class="stats" id="stats-all"></div></div>
     <div class="panel"><h2>Last 30 days</h2><div class="stats" id="stats-30"></div></div>
     <div class="panel"><h2>Open trades</h2><div id="open"></div></div>
@@ -258,10 +281,84 @@ function wireWrites(cfg) {
   });
 }
 
+// ── watchlist + price alerts ─────────────────────────────────────────────────
+let wlPrices = {};
+async function postJSON(url, body) {
+  let token = store.get() || askToken();
+  if (!token) { say('no token — writes refused', 'err'); return null; }
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Journal-Token': token }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 403) { say('token rejected', 'err'); if (askToken('That token was rejected. Try again:')) return postJSON(url, body); return null; }
+  if (!r.ok) { say(d.error || `HTTP ${r.status}`, 'err'); return null; }
+  return d;
+}
+function wlRow(sym) {
+  const p = wlPrices[sym] || {};
+  const last = p.last == null ? '–' : (+p.last).toLocaleString(undefined, { maximumSignificantDigits: 6 });
+  const ch = p.change24h;
+  const chTxt = ch == null ? '' : (ch >= 0 ? '+' : '') + ch.toFixed(2) + '%';
+  const rm = canWrite ? `<button class="btn-xs" data-wl-rm="${esc(sym)}" title="remove">✕</button>` : '';
+  const al = canWrite ? `<button class="btn-xs" data-al-for="${esc(sym)}" title="set alert">alert</button>` : '';
+  return `<tr><td><a href="#" data-wl-sym="${esc(sym)}" style="color:var(--fg);text-decoration:none">${esc(sym)}</a></td>
+    <td style="text-align:right">${last}</td>
+    <td style="text-align:right" class="${cls(ch)}">${chTxt}</td>
+    <td class="act">${al}${rm}</td></tr>`;
+}
+function alRow(a) {
+  const status = a.active ? '<span class="pos">armed</span>'
+    : (a.triggered_ts ? `<span class="muted">fired ${new Date(a.triggered_ts).toLocaleString()}</span>` : '<span class="muted">off</span>');
+  const acts = canWrite ? `
+    <button class="btn-xs" data-al-toggle="${a.id}" data-al-active="${a.active ? 0 : 1}">${a.active ? 'disable' : 'arm'}</button>
+    <button class="btn-xs" data-al-rm="${a.id}" title="delete">✕</button>` : '';
+  return `<tr><td>#${a.id}</td><td>${esc(a.symbol)}</td><td>${esc(a.op)} ${fmt(a.price, 4)}</td><td>${status}</td><td class="act">${acts}</td></tr>`;
+}
+async function loadWatchlist() {
+  let d; try { d = await j('/api/watchlist'); } catch { return; }
+  wlPrices = d.prices || {};
+  const syms = d.symbols || [];
+  $('#watchlist').innerHTML = syms.length
+    ? `<table><tr><th>symbol</th><th style="text-align:right">price</th><th style="text-align:right">24h</th><th></th></tr>${syms.map(wlRow).join('')}</table>`
+    : '<div class="muted">empty — add a symbol</div>';
+  $('#wl-updated').textContent = d.updated ? '· ' + new Date(d.updated).toLocaleTimeString() : '';
+  const al = d.alerts || [];
+  $('#alerts').innerHTML = al.length
+    ? `<table><tr><th>id</th><th>symbol</th><th>cond</th><th>status</th><th></th></tr>${al.map(alRow).join('')}</table>`
+    : '<div class="muted">no alerts</div>';
+}
+function wireWatchlist() {
+  if (canWrite) { $('#wl-add').style.display = 'flex'; $('#al-add').style.display = 'flex'; }
+  const addSym = async () => {
+    const s = $('#wl-sym').value.trim().toUpperCase(); if (!s) return;
+    if (await postJSON('/api/watchlist', { action: 'add', symbol: s })) { $('#wl-sym').value = ''; loadWatchlist(); }
+  };
+  $('#wl-addbtn').onclick = addSym;
+  $('#wl-sym').addEventListener('keydown', e => { if (e.key === 'Enter') addSym(); });
+  $('#al-addbtn').onclick = async () => {
+    const s = $('#al-sym').value.trim().toUpperCase(), op = $('#al-op').value,
+      price = parseFloat($('#al-price').value), note = $('#al-note').value.trim();
+    if (!s || isNaN(price)) { say('symbol + price required', 'err'); return; }
+    const d = await postJSON('/api/alerts', { action: 'add', symbol: s, op, price, note });
+    if (d) { $('#al-price').value = ''; $('#al-note').value = ''; say(d.message, 'pos'); loadWatchlist(); }
+  };
+  document.addEventListener('click', async e => {
+    const sym = e.target.closest('[data-wl-sym]');
+    if (sym) { e.preventDefault(); $('#symbol').value = sym.dataset.wlSym; loadChart(); return; }
+    const rm = e.target.closest('[data-wl-rm]');
+    if (rm) { if (await postJSON('/api/watchlist', { action: 'remove', symbol: rm.dataset.wlRm })) loadWatchlist(); return; }
+    const alf = e.target.closest('[data-al-for]');
+    if (alf) { $('#al-sym').value = alf.dataset.alFor; $('#al-price').focus(); return; }
+    const alt = e.target.closest('[data-al-toggle]');
+    if (alt) { if (await postJSON('/api/alerts', { action: 'toggle', id: +alt.dataset.alToggle, active: alt.dataset.alActive === '1' })) loadWatchlist(); return; }
+    const alr = e.target.closest('[data-al-rm]');
+    if (alr) { if (await postJSON('/api/alerts', { action: 'remove', id: +alr.dataset.alRm })) loadWatchlist(); return; }
+  });
+}
+
 // ── boot ────────────────────────────────────────────────────────────────────
 (async () => {
   const cfg = await j('/api/config');
   wireWrites(cfg);
+  wireWatchlist();
   // Build symbol suggestions from watches + aliases + DB history
   const watchSyms = cfg.watches.map(w => w.symbol);
   const aliasKeys = Object.keys(cfg.aliases || {});
@@ -280,7 +377,9 @@ function wireWrites(cfg) {
   // Symbol: load chart on Enter key or when selecting from datalist
   $('#symbol').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); loadChart(); } });
   $('#symbol').addEventListener('change', loadChart);
-  await Promise.all([loadPanels(), loadChart()]);
+  await Promise.all([loadPanels(), loadChart(), loadWatchlist()]);
+  // live-ish refresh of the watchlist prices + alert states
+  setInterval(loadWatchlist, 15000);
 })();
 </script>
 </body>

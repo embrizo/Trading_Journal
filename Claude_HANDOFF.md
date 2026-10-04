@@ -190,6 +190,42 @@ URL will fail on push rather than diverge — repoint it with
 
 ## Session log
 
+### Session 10 — 2026-10-04 (Claude Code on the web)
+**In one line:** deployed to a free-tier GCP e2-micro end-to-end (9 OKX watchers + Gemini
+coach + public read-only dashboard), then built a **live watchlist + one-shot price alerts**
+feature for the dashboard.
+
+- **GCP deploy done (live):** e2-micro in `us-central1` (free tier), `docker compose` stack
+  running. **OKX is reachable from GCP** (`subscribed candle1D ...`) where it was 403/DNS-blocked
+  on the user's home ISPs — so `exchange: okx` works there. Gemini coach live (`AI coach:
+  gemini-3.6-flash`). Dashboard exposed on `:8787` via a `0.0.0.0/0` firewall rule, **read-only**
+  (write_token empty at deploy time). Watches extended from SOL to **9 symbols** (SOL, BTC, ETH,
+  XRP, SUI, NEAR, ZRO, ASTER, PUMP; ROSE dropped — not an OKX swap). RAM ~90 MiB/970 (+2 GB swap).
+- **New feature — watchlist + price alerts** (this session's code; not yet verified live):
+  - `journal/pricefeed.py` — `PriceFeed` background task polls OKX `/market/tickers` every
+    `web.watchlist_poll_seconds` (default 15s, one call for all symbols), caches last price +
+    24h change, and fires **one-shot** price alerts to the notifiers when a target is reached.
+    OKX-priced regardless of `cfg.exchange` (symbols are OKX instIds).
+  - `db.py` — new `watchlist` + `price_alerts` tables (added to `_SCHEMA`, created via
+    IF NOT EXISTS on existing DBs too — no migration/version bump needed) + CRUD methods.
+  - `web.py` — `GET /api/watchlist` (symbols + cached prices + alerts, read, no auth) and
+    token-protected `POST /api/watchlist` (add/remove) + `POST /api/alerts` (add/remove/toggle).
+    `build_app`/`serve` gained an optional `feed` arg (default None — old callers/tests unaffected).
+  - `dashboard.html` — Watchlist panel (TradingView-style: symbol · price · 24h%, click to load
+    chart, add/remove) + Price-alerts panel (add form, armed/fired status, arm/disable/delete),
+    refreshing every 15s. Writes reuse the existing `write_token` localStorage flow.
+  - `__main__.py` — starts `PriceFeed` when `web.enabled`, seeds the watchlist from `cfg.watches`
+    on first run, passes the feed to the web server.
+  - `config.py` — `WebCfg.watchlist_poll_seconds` (default 15).
+  - Tests: `tests/test_watchlist.py` (7) — DB CRUD + one-shot fire/no-refire/direction. Suite
+    **292 passed** (`-m "not live"`; the one live Binance test needs network; `test_coach.py`
+    needs the `ai` extra).
+- **To use the new feature on the VM:** it needs **writes on** — set `web.write_token` to a long
+  random string in `config.yaml` (reads stay public; writes need the token typed into the page
+  once). Then `git pull && AI_ENABLED=1 docker compose up -d --build`.
+- **Security debt flagged to user:** the Telegram bot_token appeared in screenshots → should be
+  `/revoke`d. Dashboard writes on a `0.0.0.0/0` port rely on the write_token alone.
+
 ### Session 9 — 2026-10-01 (Claude Code on the web)
 **In one line:** no code changes — added `DEPLOY_GCP.md`, a free-tier GCP e2-micro deploy
 guide, via PR #1 (squash-merged to `main` as `090b5cf`).

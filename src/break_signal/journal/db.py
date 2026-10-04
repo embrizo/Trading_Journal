@@ -144,6 +144,25 @@ CREATE TABLE IF NOT EXISTS memories (
     confirmed      INTEGER NOT NULL DEFAULT 0,
     first_seen_ts  INTEGER NOT NULL, last_seen_ts INTEGER NOT NULL
 );
+
+-- Dashboard watchlist (live-price list, edited from the page) and one-shot
+-- price alerts. Independent of `watches` (the breakout engine): adding a symbol
+-- here only tracks its price and lets you set alerts, no watcher is spawned.
+CREATE TABLE IF NOT EXISTS watchlist (
+    symbol    TEXT PRIMARY KEY,
+    added_ts  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS price_alerts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol        TEXT NOT NULL,
+    op            TEXT NOT NULL CHECK (op IN ('>=','<=')),
+    price         REAL NOT NULL,
+    note          TEXT,
+    active        INTEGER NOT NULL DEFAULT 1,
+    created_ts    INTEGER NOT NULL,
+    triggered_ts  INTEGER
+);
 """
 # NB: idx_memories_key is created by _migrate_v2 (fresh DBs run it too), not here —
 # on a v1 file the column does not exist yet when this script runs.
@@ -289,6 +308,54 @@ class JournalDB:
 
     def close(self) -> None:
         self.conn.close()
+
+    # ── dashboard watchlist ─────────────────────────────────────────────
+    def watchlist_add(self, symbol: str) -> None:
+        self.conn.execute("INSERT OR IGNORE INTO watchlist(symbol, added_ts) VALUES (?,?)",
+                          (symbol, now_ms()))
+        self.conn.commit()
+
+    def watchlist_remove(self, symbol: str) -> None:
+        self.conn.execute("DELETE FROM watchlist WHERE symbol=?", (symbol,))
+        self.conn.commit()
+
+    def watchlist_all(self) -> list[str]:
+        return [r[0] for r in self.conn.execute(
+            "SELECT symbol FROM watchlist ORDER BY added_ts")]
+
+    # ── one-shot price alerts ───────────────────────────────────────────
+    def alert_add(self, symbol: str, op: str, price: float, note: str | None = None) -> int:
+        if op not in (">=", "<="):
+            raise ValueError("op must be '>=' or '<='")
+        cur = self.conn.execute(
+            "INSERT INTO price_alerts(symbol, op, price, note, active, created_ts) "
+            "VALUES (?,?,?,?,1,?)",
+            (symbol, op, float(price), note or None, now_ms()))
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def alert_remove(self, alert_id: int) -> None:
+        self.conn.execute("DELETE FROM price_alerts WHERE id=?", (alert_id,))
+        self.conn.commit()
+
+    def alert_set_active(self, alert_id: int, active: bool) -> None:
+        # Re-arming clears the previous fire so a one-shot can fire again.
+        self.conn.execute("UPDATE price_alerts SET active=?, triggered_ts=NULL WHERE id=?",
+                          (1 if active else 0, alert_id))
+        self.conn.commit()
+
+    def alert_mark_triggered(self, alert_id: int, ts: int) -> None:
+        self.conn.execute("UPDATE price_alerts SET active=0, triggered_ts=? WHERE id=?",
+                          (ts, alert_id))
+        self.conn.commit()
+
+    def alerts_all(self) -> list[dict]:
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM price_alerts ORDER BY active DESC, created_ts DESC")]
+
+    def alerts_active(self) -> list[dict]:
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM price_alerts WHERE active=1")]
 
     # ── signals ─────────────────────────────────────────────────────────
     def insert_signal(self, sig: Any, source: str = "live", candle_ts: int | None = None) -> int:
