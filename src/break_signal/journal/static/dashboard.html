@@ -134,6 +134,18 @@ const $ = (s) => document.querySelector(s);
 const fmt = (x, d = 2) => (x == null ? '–' : (typeof x === 'string' ? x : x.toFixed(d)));
 const pct = (x) => (x == null ? '–' : Math.round(x * 100) + '%');
 const cls = (x) => (x == null ? '' : x >= 0 ? 'pos' : 'neg');
+// Decimals to show for a price, scaled to its magnitude so sub-dollar coins
+// (0.7109, 0.006416…) aren't collapsed to 0.71 / 0.01 on the axis.
+function precisionFor(p) {
+  const a = Math.abs(p || 0);
+  if (a >= 100) return 2;
+  if (a >= 10) return 3;
+  if (a >= 1) return 4;
+  if (a >= 0.1) return 4;
+  if (a >= 0.01) return 5;
+  if (a >= 0.001) return 6;
+  return 8;
+}
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function j(url) { const r = await fetch(url); if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.statusText); } return r.json(); }
 
@@ -155,6 +167,10 @@ async function loadChart() {
     const d = await j(`/api/chart?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}&bars=300`);
     candles.setData(d.candles);
     const snap = d.snapshot;
+    // Scale the axis decimals to this instrument's price so cheap coins read true.
+    const refPrice = d.candles.length ? d.candles[d.candles.length - 1].close : (snap.price || 0);
+    const prec = precisionFor(refPrice);
+    candles.applyOptions({ priceFormat: { type: 'price', precision: prec, minMove: Math.pow(10, -prec) } });
     for (const ln of snap.lines || []) {
       const s = chart.addLineSeries({ color: ln.side === 'resistance' ? '#e9c46a' : '#4cc9f0', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
       s.setData([{ time: ln.anchor_ts / 1000, value: ln.anchor_value }, { time: ln.last_ts / 1000, value: ln.value }]);
@@ -171,7 +187,7 @@ async function loadChart() {
     candles.setMarkers(markers);
     chart.timeScale().fitContent();
     const sig = snap.last_bar_signal ? ` · <b>${snap.last_bar_signal.event}</b> on last bar` : '';
-    $('#chart-info').innerHTML = `as of ${snap.as_of} · price ${fmt(snap.price, 4)} · ATR ${fmt(snap.atr, 4)} · RSI ${fmt(snap.rsi, 1)} · vol ${fmt(snap.vol_ratio)}× · ${(snap.lines || []).length} lines${sig}`;
+    $('#chart-info').innerHTML = `as of ${snap.as_of} · price ${fmt(snap.price, prec)} · ATR ${fmt(snap.atr, prec)} · RSI ${fmt(snap.rsi, 1)} · vol ${fmt(snap.vol_ratio)}× · ${(snap.lines || []).length} lines${sig}`;
     $('#status').textContent = '';
   } catch (e) {
     candles.setData([]); candles.setMarkers([]);
