@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Break Signal — journal</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAzMiAzMic+PHJlY3Qgd2lkdGg9JzMyJyBoZWlnaHQ9JzMyJyByeD0nNycgZmlsbD0nIzE3MWEyMScvPjxsaW5lIHgxPSc1JyB5MT0nMTgnIHgyPScyNycgeTI9JzE4JyBzdHJva2U9JyNlOWM0NmEnIHN0cm9rZS13aWR0aD0nMicgc3Ryb2tlLWRhc2hhcnJheT0nMyAzJyBzdHJva2UtbGluZWNhcD0ncm91bmQnLz48cGF0aCBkPSdNMTYgMjcgTDE2IDgnIHN0cm9rZT0nIzJhOWQ4Zicgc3Ryb2tlLXdpZHRoPSczJyBzdHJva2UtbGluZWNhcD0ncm91bmQnLz48cGF0aCBkPSdNOSAxNSBMMTYgNyBMMjMgMTUnIGZpbGw9J25vbmUnIHN0cm9rZT0nIzJhOWQ4Zicgc3Ryb2tlLXdpZHRoPSczJyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48L3N2Zz4=">
+<link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAzMiAzMic+PHJlY3Qgd2lkdGg9JzMyJyBoZWlnaHQ9JzMyJyByeD0nNycgZmlsbD0nIzE3MWEyMScvPjxsaW5lIHgxPSc1JyB5MT0nMTgnIHgyPScyNycgeTI9JzE4JyBzdHJva2U9JyNlOWM0NmEnIHN0cm9rZS13aWR0aD0nMicgc3Ryb2tlLWRhc2hhcnJheT0nMyAzJyBzdHJva2UtbGluZWNhcD0ncm91bmQnLz48cGF0aCBkPSdNMTYgMjcgTDE2IDgnIHN0cm9rZT0nIzJhOWQ4Zicgc3Ryb2tlLXdpZHRoPSczJyBzdHJva2UtbGluZWNhcD0ncm91bmQnLz48cGF0aCBkPSdNOSAxNSBMMTYgNyBMMjMgMTUnIGZpbGw9J25vbmUnIHN0cm9rZT0nIzJhOWQ4Zicgc3Ryb2tlLXdpZHRoPSczJyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48L3N2Zz4=">
+
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   :root { --bg:#0f1115; --panel:#171a21; --line:#262a33; --fg:#d7dae0; --muted:#8b91a0;
@@ -51,7 +54,14 @@
 </head>
 <body>
 <header>
-  <h1>Break Signal · journal</h1>
+  <h1 style="display:flex;align-items:center;gap:8px">
+    <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true" style="flex:none">
+      <rect width="32" height="32" rx="7" fill="#171a21"/>
+      <line x1="5" y1="18" x2="27" y2="18" stroke="#e9c46a" stroke-width="2" stroke-dasharray="3 3" stroke-linecap="round"/>
+      <path d="M16 27 L16 8" stroke="#2a9d8f" stroke-width="3" stroke-linecap="round"/>
+      <path d="M9 15 L16 7 L23 15" fill="none" stroke="#2a9d8f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    Break Signal · journal</h1>
   <input id="symbol" list="symbol-list" placeholder="e.g. BTC" autocomplete="off"
          style="text-transform:uppercase; width:160px; background:var(--panel); color:var(--fg);
                 border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit">
@@ -88,6 +98,29 @@
     <div class="panel"><h2>Recent trades</h2><div class="scroll" id="trades"></div></div>
   </div>
   <div class="stack">
+    <div class="panel">
+      <h2>Watchlist <span id="wl-updated" class="muted" style="text-transform:none;letter-spacing:0;font-weight:400;font-size:11px"></span></h2>
+      <div id="wl-add" style="display:none; gap:6px; margin-bottom:8px">
+        <input id="wl-sym" placeholder="SYMBOL e.g. DOGE-USDT-SWAP" autocomplete="off"
+               style="flex:1;min-width:0;text-transform:uppercase;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit">
+        <button id="wl-addbtn" class="btn-xs">add</button>
+      </div>
+      <div class="scroll" id="watchlist"></div>
+    </div>
+    <div class="panel">
+      <h2>Price alerts <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400;font-size:11px">· one-shot → Telegram</span></h2>
+      <div id="al-add" style="display:none; flex-wrap:wrap; gap:6px; margin-bottom:8px">
+        <input id="al-sym" placeholder="SYMBOL"
+               style="width:150px;text-transform:uppercase;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit">
+        <select id="al-op"><option value="&gt;=">≥</option><option value="&lt;=">≤</option></select>
+        <input id="al-price" type="number" step="any" placeholder="price"
+               style="width:100px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit">
+        <input id="al-note" placeholder="note (optional)"
+               style="flex:1;min-width:120px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit">
+        <button id="al-addbtn" class="btn-xs">add alert</button>
+      </div>
+      <div class="scroll" id="alerts"></div>
+    </div>
     <div class="panel"><h2>All time</h2><div class="stats" id="stats-all"></div></div>
     <div class="panel"><h2>Last 30 days</h2><div class="stats" id="stats-30"></div></div>
     <div class="panel"><h2>Open trades</h2><div id="open"></div></div>
@@ -101,6 +134,18 @@ const $ = (s) => document.querySelector(s);
 const fmt = (x, d = 2) => (x == null ? '–' : (typeof x === 'string' ? x : x.toFixed(d)));
 const pct = (x) => (x == null ? '–' : Math.round(x * 100) + '%');
 const cls = (x) => (x == null ? '' : x >= 0 ? 'pos' : 'neg');
+// Decimals to show for a price, scaled to its magnitude so sub-dollar coins
+// (0.7109, 0.006416…) aren't collapsed to 0.71 / 0.01 on the axis.
+function precisionFor(p) {
+  const a = Math.abs(p || 0);
+  if (a >= 100) return 2;
+  if (a >= 10) return 3;
+  if (a >= 1) return 4;
+  if (a >= 0.1) return 4;
+  if (a >= 0.01) return 5;
+  if (a >= 0.001) return 6;
+  return 8;
+}
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function j(url) { const r = await fetch(url); if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.statusText); } return r.json(); }
 
@@ -122,6 +167,10 @@ async function loadChart() {
     const d = await j(`/api/chart?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}&bars=300`);
     candles.setData(d.candles);
     const snap = d.snapshot;
+    // Scale the axis decimals to this instrument's price so cheap coins read true.
+    const refPrice = d.candles.length ? d.candles[d.candles.length - 1].close : (snap.price || 0);
+    const prec = precisionFor(refPrice);
+    candles.applyOptions({ priceFormat: { type: 'price', precision: prec, minMove: Math.pow(10, -prec) } });
     for (const ln of snap.lines || []) {
       const s = chart.addLineSeries({ color: ln.side === 'resistance' ? '#e9c46a' : '#4cc9f0', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
       s.setData([{ time: ln.anchor_ts / 1000, value: ln.anchor_value }, { time: ln.last_ts / 1000, value: ln.value }]);
@@ -138,7 +187,7 @@ async function loadChart() {
     candles.setMarkers(markers);
     chart.timeScale().fitContent();
     const sig = snap.last_bar_signal ? ` · <b>${snap.last_bar_signal.event}</b> on last bar` : '';
-    $('#chart-info').innerHTML = `as of ${snap.as_of} · price ${fmt(snap.price, 4)} · ATR ${fmt(snap.atr, 4)} · RSI ${fmt(snap.rsi, 1)} · vol ${fmt(snap.vol_ratio)}× · ${(snap.lines || []).length} lines${sig}`;
+    $('#chart-info').innerHTML = `as of ${snap.as_of} · price ${fmt(snap.price, prec)} · ATR ${fmt(snap.atr, prec)} · RSI ${fmt(snap.rsi, 1)} · vol ${fmt(snap.vol_ratio)}× · ${(snap.lines || []).length} lines${sig}`;
     $('#status').textContent = '';
   } catch (e) {
     candles.setData([]); candles.setMarkers([]);
@@ -258,10 +307,86 @@ function wireWrites(cfg) {
   });
 }
 
+// ── watchlist + price alerts ─────────────────────────────────────────────────
+let wlPrices = {};
+let wlPollSeconds = 5;   // refresh cadence, taken from the server's config
+async function postJSON(url, body) {
+  let token = store.get() || askToken();
+  if (!token) { say('no token — writes refused', 'err'); return null; }
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Journal-Token': token }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 403) { say('token rejected', 'err'); if (askToken('That token was rejected. Try again:')) return postJSON(url, body); return null; }
+  if (!r.ok) { say(d.error || `HTTP ${r.status}`, 'err'); return null; }
+  return d;
+}
+function wlRow(sym) {
+  const p = wlPrices[sym] || {};
+  const last = p.last == null ? '–' : (+p.last).toLocaleString(undefined, { maximumSignificantDigits: 6 });
+  const ch = p.change24h;
+  const chTxt = ch == null ? '' : (ch >= 0 ? '+' : '') + ch.toFixed(2) + '%';
+  const rm = canWrite ? `<button class="btn-xs" data-wl-rm="${esc(sym)}" title="remove">✕</button>` : '';
+  const al = canWrite ? `<button class="btn-xs" data-al-for="${esc(sym)}" title="set alert">alert</button>` : '';
+  return `<tr><td><a href="#" data-wl-sym="${esc(sym)}" style="color:var(--fg);text-decoration:none">${esc(sym)}</a></td>
+    <td style="text-align:right">${last}</td>
+    <td style="text-align:right" class="${cls(ch)}">${chTxt}</td>
+    <td class="act">${al}${rm}</td></tr>`;
+}
+function alRow(a) {
+  const status = a.active ? '<span class="pos">armed</span>'
+    : (a.triggered_ts ? `<span class="muted">fired ${new Date(a.triggered_ts).toLocaleString()}</span>` : '<span class="muted">off</span>');
+  const acts = canWrite ? `
+    <button class="btn-xs" data-al-toggle="${a.id}" data-al-active="${a.active ? 0 : 1}">${a.active ? 'disable' : 'arm'}</button>
+    <button class="btn-xs" data-al-rm="${a.id}" title="delete">✕</button>` : '';
+  return `<tr><td>#${a.id}</td><td>${esc(a.symbol)}</td><td>${esc(a.op)} ${fmt(a.price, 4)}</td><td>${status}</td><td class="act">${acts}</td></tr>`;
+}
+async function loadWatchlist() {
+  let d; try { d = await j('/api/watchlist'); } catch { return; }
+  wlPrices = d.prices || {};
+  if (d.poll_seconds) wlPollSeconds = d.poll_seconds;
+  const syms = d.symbols || [];
+  $('#watchlist').innerHTML = syms.length
+    ? `<table><tr><th>symbol</th><th style="text-align:right">price</th><th style="text-align:right">24h</th><th></th></tr>${syms.map(wlRow).join('')}</table>`
+    : '<div class="muted">empty — add a symbol</div>';
+  $('#wl-updated').textContent = d.updated ? '· ' + new Date(d.updated).toLocaleTimeString() : '';
+  const al = d.alerts || [];
+  $('#alerts').innerHTML = al.length
+    ? `<table><tr><th>id</th><th>symbol</th><th>cond</th><th>status</th><th></th></tr>${al.map(alRow).join('')}</table>`
+    : '<div class="muted">no alerts</div>';
+}
+function wireWatchlist() {
+  if (canWrite) { $('#wl-add').style.display = 'flex'; $('#al-add').style.display = 'flex'; }
+  const addSym = async () => {
+    const s = $('#wl-sym').value.trim().toUpperCase(); if (!s) return;
+    if (await postJSON('/api/watchlist', { action: 'add', symbol: s })) { $('#wl-sym').value = ''; loadWatchlist(); }
+  };
+  $('#wl-addbtn').onclick = addSym;
+  $('#wl-sym').addEventListener('keydown', e => { if (e.key === 'Enter') addSym(); });
+  $('#al-addbtn').onclick = async () => {
+    const s = $('#al-sym').value.trim().toUpperCase(), op = $('#al-op').value,
+      price = parseFloat($('#al-price').value), note = $('#al-note').value.trim();
+    if (!s || isNaN(price)) { say('symbol + price required', 'err'); return; }
+    const d = await postJSON('/api/alerts', { action: 'add', symbol: s, op, price, note });
+    if (d) { $('#al-price').value = ''; $('#al-note').value = ''; say(d.message, 'pos'); loadWatchlist(); }
+  };
+  document.addEventListener('click', async e => {
+    const sym = e.target.closest('[data-wl-sym]');
+    if (sym) { e.preventDefault(); $('#symbol').value = sym.dataset.wlSym; loadChart(); return; }
+    const rm = e.target.closest('[data-wl-rm]');
+    if (rm) { if (await postJSON('/api/watchlist', { action: 'remove', symbol: rm.dataset.wlRm })) loadWatchlist(); return; }
+    const alf = e.target.closest('[data-al-for]');
+    if (alf) { $('#al-sym').value = alf.dataset.alFor; $('#al-price').focus(); return; }
+    const alt = e.target.closest('[data-al-toggle]');
+    if (alt) { if (await postJSON('/api/alerts', { action: 'toggle', id: +alt.dataset.alToggle, active: alt.dataset.alActive === '1' })) loadWatchlist(); return; }
+    const alr = e.target.closest('[data-al-rm]');
+    if (alr) { if (await postJSON('/api/alerts', { action: 'remove', id: +alr.dataset.alRm })) loadWatchlist(); return; }
+  });
+}
+
 // ── boot ────────────────────────────────────────────────────────────────────
 (async () => {
   const cfg = await j('/api/config');
   wireWrites(cfg);
+  wireWatchlist();
   // Build symbol suggestions from watches + aliases + DB history
   const watchSyms = cfg.watches.map(w => w.symbol);
   const aliasKeys = Object.keys(cfg.aliases || {});
@@ -280,7 +405,9 @@ function wireWrites(cfg) {
   // Symbol: load chart on Enter key or when selecting from datalist
   $('#symbol').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); loadChart(); } });
   $('#symbol').addEventListener('change', loadChart);
-  await Promise.all([loadPanels(), loadChart()]);
+  await Promise.all([loadPanels(), loadChart(), loadWatchlist()]);
+  // live-ish refresh of the watchlist prices + alert states (server-configured)
+  setInterval(loadWatchlist, Math.max(2, wlPollSeconds) * 1000);
 })();
 </script>
 </body>

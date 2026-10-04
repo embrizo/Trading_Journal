@@ -58,12 +58,23 @@ async def run(config_path: str) -> None:
     if cfg.journal.backup_dir:
         from .journal.backup import run_scheduler as run_backups
         tasks.append(run_backups(cfg, journal))
+    feed = None
+    if cfg.web.enabled:
+        from .journal.pricefeed import PriceFeed
+        # Seed the watchlist from the configured watches on first run so the
+        # dashboard opens on the symbols the engine already tracks.
+        if not journal.watchlist_all():
+            for w in cfg.watches:
+                journal.watchlist_add(w.symbol)
+        feed = PriceFeed(cfg, journal, notifiers)
+        tasks.append(feed.run())
     if cfg.web.enabled or cfg.webhook.enabled:
         from .journal.web import serve as serve_web
-        tasks.append(serve_web(cfg, journal, notifiers, tools))
-    log.info("Starting %d watcher(s)%s%s%s%s", len(watchers), " + telegram bot" if bot else "",
+        tasks.append(serve_web(cfg, journal, notifiers, tools, feed))
+    log.info("Starting %d watcher(s)%s%s%s%s%s", len(watchers), " + telegram bot" if bot else "",
              " + report scheduler" if cfg.ai.weekly_report and notifiers else "",
              " + nightly backup" if cfg.journal.backup_dir else "",
+             " + price feed" if feed is not None else "",
              f" + web :{cfg.web.port}" if cfg.web.enabled or cfg.webhook.enabled else "")
     try:
         await asyncio.gather(*tasks)

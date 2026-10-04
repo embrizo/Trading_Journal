@@ -1,6 +1,6 @@
 # Claude handoff — Break Signal
 
-**Last Updated:** 2026-09-24 (session 8)
+**Last Updated:** 2026-10-01 (session 9)
 **Workspace:** two clones exist — `D:\etc\Program\7Days\Trading_Journal` (session 7) and
 `G:\7Days\Trading_Journal` (sessions 1–6 and 8). Neither is canonical; the remote is.
 Pull before working, and check `git status` in the *other* clone before assuming it is idle.
@@ -179,13 +179,77 @@ URL will fail on push rather than diverge — repoint it with
 0b. ~~WS idle timeout~~ — **done 2026-09-24.** `binance_ws.IDLE_TIMEOUT_S = 60` (klines push every ~250 ms) and `okx_ws.IDLE_TIMEOUT_S = 90`, the latter counted from the last message of *any* kind, pong included, so an unanswered ping can no longer keep a mute socket alive for ever. Both raise `ConnectionError` into the existing reconnect/backoff and log a warning naming the silence. 5 tests drive a fake socket that connects and then says nothing.
 1. **Discord webhook** — same pattern as Telegram: `channels.discord.enabled: true` + `webhook_url` from a channel's Integrations → Webhooks, then confirm a real break posts. Not yet done; Telegram is verified, Discord isn't. Completes M5 once both are live. *(REST + WS data paths already verified live 2026-09-07.)*
 2. **User action: load Pine indicator on TradingView** — verify auto lines match the reference screenshot; tune `pivotLen`/`atrBreak` (M2/M3). Copy winning tuning into `config.example.yaml` `params:` for parity.
-3. **Deploy to Pi 5** — `docker compose up -d --build`; point `./data` (state dir) at an SSD/USB.
+3. **Deploy** — Pi 5: `docker compose up -d --build`; point `./data` (state dir) at an SSD/USB.
+   Cloud alternative documented in [`DEPLOY_GCP.md`](DEPLOY_GCP.md) (session 9): a free-tier GCP
+   e2-micro runs the same compose stack — **untested against a live GCP project**, verify billing
+   shows ~$0 the first week. Neither path has been run end-to-end yet.
 4. ~~M6 backtest report~~ — **done 2026-09-24.** `backtest/report.py` + [`BACKTEST_REPORT.md`](BACKTEST_REPORT.md): **`--days 730`** × SOL/BTC/ETH × 1D/4H on Binance, 743 judged signals over one shared 2-year window. **The defaults are not SOL-specific** — the three markets behave alike, which was the question. The finding that matters is the **timeframe split: 1D PF 1.65–2.27 (win 45–56%, +0.35 to +0.56R) against 4H PF 0.96–1.21 (win 33–38%, −0.03 to +0.13R)**, and SOL 4H is outright negative (−5.11R over 189 signals). 4H is break-even at best before costs, which fees/funding would erase — the 4H watch was dropped on this. Caveats live in the report (neutral proxy exit, not a strategy; no costs; one regime; compare rows only when their windows match). **Use `--days`, never `--limit`, to compare timeframes** — see the code-review note in the session log.
 5. ~~Optional Phase 3 dashboard~~ — **built in J6** (aiohttp, not FastAPI: one server shared with the Pine webhook). Since 2026-09-23 it can also *write* — `web.write_token` enables a command bar taking the CLI's one-line syntax. See the J6 entry and `README.md`.
 6. ~~Push `main`~~ — long done; the repo moved to https://github.com/embrizo/Trading_Journal on 2026-09-22 and is pushed after every session.
 7. **Tighten the backtest if you lean on it further** — the exit rule is a neutral proxy, and costs are still not modelled. `--rr` / `--horizon` sweeps would show how sensitive the 1D edge is; fees + funding would show whether 4H is merely break-even or actually negative net. Neither is built.
 
 ## Session log
+
+### Session 10 — 2026-10-04 (Claude Code on the web)
+**In one line:** deployed to a free-tier GCP e2-micro end-to-end (9 OKX watchers + Gemini
+coach + public read-only dashboard), then built a **live watchlist + one-shot price alerts**
+feature for the dashboard.
+
+- **GCP deploy done (live):** e2-micro in `us-central1` (free tier), `docker compose` stack
+  running. **OKX is reachable from GCP** (`subscribed candle1D ...`) where it was 403/DNS-blocked
+  on the user's home ISPs — so `exchange: okx` works there. Gemini coach live (`AI coach:
+  gemini-3.6-flash`). Dashboard exposed on `:8787` via a `0.0.0.0/0` firewall rule, **read-only**
+  (write_token empty at deploy time). Watches extended from SOL to **9 symbols** (SOL, BTC, ETH,
+  XRP, SUI, NEAR, ZRO, ASTER, PUMP; ROSE dropped — not an OKX swap). RAM ~90 MiB/970 (+2 GB swap).
+- **New feature — watchlist + price alerts** (this session's code; not yet verified live):
+  - `journal/pricefeed.py` — `PriceFeed` background task polls OKX `/market/tickers` every
+    `web.watchlist_poll_seconds` (default 15s, one call for all symbols), caches last price +
+    24h change, and fires **one-shot** price alerts to the notifiers when a target is reached.
+    OKX-priced regardless of `cfg.exchange` (symbols are OKX instIds).
+  - `db.py` — new `watchlist` + `price_alerts` tables (added to `_SCHEMA`, created via
+    IF NOT EXISTS on existing DBs too — no migration/version bump needed) + CRUD methods.
+  - `web.py` — `GET /api/watchlist` (symbols + cached prices + alerts, read, no auth) and
+    token-protected `POST /api/watchlist` (add/remove) + `POST /api/alerts` (add/remove/toggle).
+    `build_app`/`serve` gained an optional `feed` arg (default None — old callers/tests unaffected).
+  - `dashboard.html` — Watchlist panel (TradingView-style: symbol · price · 24h%, click to load
+    chart, add/remove) + Price-alerts panel (add form, armed/fired status, arm/disable/delete),
+    refreshing every 15s. Writes reuse the existing `write_token` localStorage flow.
+  - `__main__.py` — starts `PriceFeed` when `web.enabled`, seeds the watchlist from `cfg.watches`
+    on first run, passes the feed to the web server.
+  - `config.py` — `WebCfg.watchlist_poll_seconds` (default 15).
+  - Tests: `tests/test_watchlist.py` (7) — DB CRUD + one-shot fire/no-refire/direction. Suite
+    **292 passed** (`-m "not live"`; the one live Binance test needs network; `test_coach.py`
+    needs the `ai` extra).
+- **To use the new feature on the VM:** it needs **writes on** — set `web.write_token` to a long
+  random string in `config.yaml` (reads stay public; writes need the token typed into the page
+  once). Then `git pull && AI_ENABLED=1 docker compose up -d --build`.
+- **Security debt flagged to user:** the Telegram bot_token appeared in screenshots → should be
+  `/revoke`d. Dashboard writes on a `0.0.0.0/0` port rely on the write_token alone.
+
+### Session 9 — 2026-10-01 (Claude Code on the web)
+**In one line:** no code changes — added `DEPLOY_GCP.md`, a free-tier GCP e2-micro deploy
+guide, via PR #1 (squash-merged to `main` as `090b5cf`).
+
+- **Context:** user has a ฿329/mo Google Cloud "Gen AI & Cloud" credit and asked whether to
+  deploy on GCP. The recommendation: the watcher is an always-on process (live WS + SQLite on
+  a persistent disk), so a small always-on VM is the right shape — **not Cloud Run / serverless**
+  (scales to zero, ephemeral FS fights the SQLite volume). Chose the **free-tier e2-micro**.
+- **`DEPLOY_GCP.md`** covers: the three free regions (`us-west1`/`us-central1`/`us-east1`), a
+  pre-build **2 GB swapfile** for the 1 GB RAM constraint (numpy+pandas+matplotlib is borderline),
+  outbound-only (no ingress firewall needed by default), the piwheels-on-x86 no-op note, Docker
+  install, secrets via `config.yaml` + `.env`, a verify step (a closed candle, not just a connect
+  log — the session-8 lesson), and a one-command bump to e2-small if 1 GB OOMs. Also flags that
+  OKX **may** be reachable from a GCP VM (Google egress) where it wasn't on the home ISPs.
+- **Credit guidance:** the credit's highest-value use is the **Gemini coach API calls** (the
+  "Gen AI" part); e2-micro hosting is ~free on its own.
+- **Verified:** core + journal test suite still **300 passed** locally (the 16 `test_coach.py`
+  failures seen were only the missing `ai` extra — anthropic/google-genai/mcp not installed in
+  this web container — not real defects). The merged file was confirmed present on `main`.
+- **Caveat:** the gcloud/apt command sequences are the standard Debian 12 + Docker path and were
+  **not** run against a live GCP project. See Next steps #3.
+- **Workflow note:** this ran in a Claude Code *web* session on branch
+  `claude/compassionate-wozniak-zcnpzq`. GitHub push 403'd until the user re-linked the Claude
+  GitHub App mid-session; after that the push, PR, merge, and watch all went through.
 
 ### Session 8 — 2026-09-24 (G: clone)
 **In one line:** pulled session 7's work (no divergence), closed the WS-silence hole, built and

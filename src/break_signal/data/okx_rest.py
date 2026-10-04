@@ -36,6 +36,7 @@ REST_URL = os.environ.get("OKX_REST_URL", "https://www.okx.com").rstrip("/")
 
 _CANDLES = "/api/v5/market/candles"
 _HISTORY = "/api/v5/market/history-candles"
+_TICKERS = "/api/v5/market/tickers"
 _CANDLES_MAX = 300   # OKX per-call cap for /candles
 _HISTORY_MAX = 100   # OKX per-call cap for /history-candles
 _TIMEOUT = aiohttp.ClientTimeout(total=30)
@@ -68,6 +69,33 @@ def _absorb(rows: dict[int, tuple], data: list[list], *, confirmed_only: bool) -
         rows[ts] = (float(a[1]), float(a[2]), float(a[3]), float(a[4]), float(a[5]))
         added += 1
     return added
+
+
+async def fetch_tickers(
+    session: aiohttp.ClientSession, inst_type: str = "SWAP"
+) -> dict[str, dict]:
+    """Last price + 24h change for every ``inst_type`` instrument, in one call.
+
+    Returns ``{instId: {"last": float, "change24h": float | None}}`` where
+    ``change24h`` is the percentage move from the 24h-ago open (``None`` when
+    OKX reports a zero/absent open). Used by the dashboard watchlist and the
+    one-shot price alerts — no API key needed (public market data).
+    """
+    data = await _get(session, _TICKERS, {"instType": inst_type})
+    out: dict[str, dict] = {}
+    for t in data:
+        try:
+            inst = t["instId"]
+            last = float(t["last"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        try:
+            open24 = float(t.get("open24h") or 0)
+        except (TypeError, ValueError):
+            open24 = 0.0
+        change = ((last - open24) / open24 * 100.0) if open24 else None
+        out[inst] = {"last": last, "change24h": change}
+    return out
 
 
 async def fetch_candles(

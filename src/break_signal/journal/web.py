@@ -33,7 +33,8 @@ log = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
 
 
-def build_app(cfg: "Config", db: JournalDB, notifiers: list[Any], tools: Tools | None = None):
+def build_app(cfg: "Config", db: JournalDB, notifiers: list[Any], tools: Tools | None = None,
+              feed: Any | None = None):
     from aiohttp import web
 
     tools = tools or Tools(db, cfg)
@@ -51,11 +52,11 @@ def build_app(cfg: "Config", db: JournalDB, notifiers: list[Any], tools: Tools |
         app.router.add_post("/pine/{secret}", make_pine_handler(cfg, db, notifiers))
 
     if cfg.web.enabled and cfg.web.dashboard:
-        _add_dashboard(app, cfg, db, tools)
+        _add_dashboard(app, cfg, db, tools, feed)
     return app
 
 
-def _add_dashboard(app, cfg: "Config", db: JournalDB, tools: Tools) -> None:
+def _add_dashboard(app, cfg: "Config", db: JournalDB, tools: Tools, feed: Any | None = None) -> None:
     from aiohttp import web
 
     def _int(req, name, default):
@@ -142,15 +143,30 @@ def _add_dashboard(app, cfg: "Config", db: JournalDB, tools: Tools) -> None:
         return respond({"symbol": symbol, "tf": tf, "candles": ohlc, "snapshot": snap,
                         "signals": signals, "trades": trades})
 
+    async def api_watchlist(_req):
+        """The editable live-price list: symbols, their cached prices, and alerts."""
+        prices = feed.prices if feed is not None else {}
+        updated = feed.updated_ts if feed is not None else None
+        return respond({
+            "symbols": db.watchlist_all(),
+            "prices": prices,
+            "updated": updated,
+            "alerts": db.alerts_all(),
+            "poll_seconds": cfg.web.watchlist_poll_seconds,
+        })
+
     app.router.add_get("/", index)
     app.router.add_get("/api/config", api_config)
     app.router.add_get("/api/summary", api_summary)
     app.router.add_get("/api/trades", api_trades)
     app.router.add_get("/api/signals", api_signals)
     app.router.add_get("/api/chart", api_chart)
+    app.router.add_get("/api/watchlist", api_watchlist)
     if cfg.web.write_token:
         app.router.add_post("/api/do", _make_write_handler(cfg, tools, respond))
-        log.info("web: writes enabled at /api/do (token required)")
+        app.router.add_post("/api/watchlist", _make_watchlist_handler(cfg, db, respond))
+        app.router.add_post("/api/alerts", _make_alerts_handler(cfg, db, respond))
+        log.info("web: writes enabled at /api/do, /api/watchlist, /api/alerts (token required)")
 
 
 HELP = """add <SYM> [<tf>] long|short <entry> [sl x] [tp x] [size x] [risk x[%]] [#tags] [-- reason]
@@ -271,13 +287,85 @@ def _make_write_handler(cfg: "Config", tools: Tools, respond):
     return do
 
 
-async def serve(cfg: "Config", db: JournalDB, notifiers: list[Any], tools: Tools | None = None) -> None:
+def _bad_token(req, token: str) -> bool:
+    import hmac
+    return not hmac.compare_digest(req.headers.get("X-Journal-Token", ""), token)
+
+
+def _make_watchlist_handler(cfg: "Config", db: JournalDB, respond):
+    """POST /api/watchlist {"action": "add"|"remove", "symbol": "..."} (token)."""
+    token = cfg.web.write_token
+
+    async def handler(req):
+        if _bad_token(req, token):
+            return respond({"error": "forbidden — wrong or missing X-Journal-Token"}, status=403)
+        try:
+            body = json.loads(await req.text() or "{}") or {}
+        except json.JSONDecodeError:
+            return respond({"error": "body must be JSON"}, status=400)
+        action = str(body.get("action", "")).lower()
+        symbol = str(body.get("symbol", "")).strip().upper()
+        if not symbol:
+            return respond({"error": "symbol required"}, status=400)
+        if action == "add":
+            db.watchlist_add(symbol)
+        elif action == "remove":
+            db.watchlist_remove(symbol)
+        else:
+            return respond({"error": "action must be add|remove"}, status=400)
+        log.info("web: watchlist %s %s", action, symbol)
+        return respond({"ok": True, "symbols": db.watchlist_all()})
+
+    return handler
+
+
+def _make_alerts_handler(cfg: "Config", db: JournalDB, respond):
+    """POST /api/alerts — add / remove / toggle a one-shot price alert (token)."""
+    token = cfg.web.write_token
+
+    async def handler(req):
+        if _bad_token(req, token):
+            return respond({"error": "forbidden — wrong or missing X-Journal-Token"}, status=403)
+        try:
+            body = json.loads(await req.text() or "{}") or {}
+        except json.JSONDecodeError:
+            return respond({"error": "body must be JSON"}, status=400)
+        action = str(body.get("action", "")).lower()
+        try:
+            if action == "add":
+                symbol = str(body.get("symbol", "")).strip().upper()
+                if not symbol:
+                    return respond({"error": "symbol required"}, status=400)
+                op = str(body.get("op", "")).strip()
+                price = float(body.get("price"))
+                note = str(body.get("note", "")).strip() or None
+                aid = db.alert_add(symbol, op, price, note)
+                msg = f"alert #{aid}: {symbol} {op} {price:g}"
+            elif action == "remove":
+                db.alert_remove(int(body["id"]))
+                msg = f"removed alert #{int(body['id'])}"
+            elif action == "toggle":
+                active = bool(body.get("active", True))
+                db.alert_set_active(int(body["id"]), active)
+                msg = f"alert #{int(body['id'])} {'armed' if active else 'disabled'}"
+            else:
+                return respond({"error": "action must be add|remove|toggle"}, status=400)
+        except (KeyError, TypeError, ValueError) as e:
+            return respond({"error": f"bad request: {e}"}, status=400)
+        log.info("web: alerts %s", msg)
+        return respond({"ok": True, "message": msg, "alerts": db.alerts_all()})
+
+    return handler
+
+
+async def serve(cfg: "Config", db: JournalDB, notifiers: list[Any], tools: Tools | None = None,
+                feed: Any | None = None) -> None:
     """Background task: run the HTTP server until cancelled."""
     from aiohttp import web
 
     if cfg.webhook.enabled and not cfg.webhook.secret:
         log.error("webhook.enabled but webhook.secret is empty — webhook route NOT registered")
-    runner = web.AppRunner(build_app(cfg, db, notifiers, tools))
+    runner = web.AppRunner(build_app(cfg, db, notifiers, tools, feed))
     await runner.setup()
     site = web.TCPSite(runner, cfg.web.host, cfg.web.port)
     await site.start()
