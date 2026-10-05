@@ -159,9 +159,11 @@ let lineSeries = [];
 const eqChart = LightweightCharts.createChart($('#equity'), { ...chartOpts, timeScale: { visible: false } });
 const eqSeries = eqChart.addLineSeries({ color: '#a78bfa', lineWidth: 2 });
 
-async function loadChart() {
+async function loadChart(fit = true) {
   const symbol = $('#symbol').value, tf = $('#tf').value;
-  $('#status').textContent = 'loading chart…';
+  // `fit` = a manual load (fit the view + show status). Auto-refresh passes
+  // false so the viewer's zoom/pan is preserved and the status bar doesn't blink.
+  if (fit) $('#status').textContent = 'loading chart…';
   lineSeries.forEach(s => chart.removeSeries(s)); lineSeries = [];
   try {
     const d = await j(`/api/chart?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}&bars=300`);
@@ -185,7 +187,7 @@ async function loadChart() {
     }
     markers.sort((a, b) => a.time - b.time);
     candles.setMarkers(markers);
-    chart.timeScale().fitContent();
+    if (fit) chart.timeScale().fitContent();
     const sig = snap.last_bar_signal ? ` · <b>${snap.last_bar_signal.event}</b> on last bar` : '';
     $('#chart-info').innerHTML = `as of ${snap.as_of} · price ${fmt(snap.price, prec)} · ATR ${fmt(snap.atr, prec)} · RSI ${fmt(snap.rsi, 1)} · vol ${fmt(snap.vol_ratio)}× · ${(snap.lines || []).length} lines${sig}`;
     $('#status').textContent = '';
@@ -408,6 +410,8 @@ function wireWatchlist() {
   await Promise.all([loadPanels(), loadChart(), loadWatchlist()]);
   // live-ish refresh of the watchlist prices + alert states (server-configured)
   setInterval(loadWatchlist, Math.max(2, wlPollSeconds) * 1000);
+  // Auto-refresh the chart every 30s without resetting the viewer's zoom/pan.
+  setInterval(() => loadChart(false), 30000);
 })();
 </script>
 </body>
