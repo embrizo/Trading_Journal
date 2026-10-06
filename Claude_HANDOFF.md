@@ -1,6 +1,6 @@
 # Claude handoff — Break Signal
 
-**Last Updated:** 2026-10-01 (session 9)
+**Last Updated:** 2026-10-06 (session 11)
 **Workspace:** two clones exist — `D:\etc\Program\7Days\Trading_Journal` (session 7) and
 `G:\7Days\Trading_Journal` (sessions 1–6 and 8). Neither is canonical; the remote is.
 Pull before working, and check `git status` in the *other* clone before assuming it is idle.
@@ -180,15 +180,50 @@ URL will fail on push rather than diverge — repoint it with
 1. **Discord webhook** — same pattern as Telegram: `channels.discord.enabled: true` + `webhook_url` from a channel's Integrations → Webhooks, then confirm a real break posts. Not yet done; Telegram is verified, Discord isn't. Completes M5 once both are live. *(REST + WS data paths already verified live 2026-09-07.)*
 2. **User action: load Pine indicator on TradingView** — verify auto lines match the reference screenshot; tune `pivotLen`/`atrBreak` (M2/M3). Copy winning tuning into `config.example.yaml` `params:` for parity.
 3. **Deploy** — Pi 5: `docker compose up -d --build`; point `./data` (state dir) at an SSD/USB.
-   Cloud alternative documented in [`DEPLOY_GCP.md`](DEPLOY_GCP.md) (session 9): a free-tier GCP
-   e2-micro runs the same compose stack — **untested against a live GCP project**, verify billing
-   shows ~$0 the first week. Neither path has been run end-to-end yet.
+   Cloud alternative in [`DEPLOY_GCP.md`](DEPLOY_GCP.md) (session 9): a free-tier GCP e2-micro
+   runs the same compose stack — **now running live end-to-end** (sessions 10–11): 9 OKX watchers
+   + Gemini coach + public read-only dashboard on `:8787`. Remaining: confirm free-tier billing
+   stays ~$0, and exercise a live price-alert fire to Telegram. Pi path still not run.
 4. ~~M6 backtest report~~ — **done 2026-09-24.** `backtest/report.py` + [`BACKTEST_REPORT.md`](BACKTEST_REPORT.md): **`--days 730`** × SOL/BTC/ETH × 1D/4H on Binance, 743 judged signals over one shared 2-year window. **The defaults are not SOL-specific** — the three markets behave alike, which was the question. The finding that matters is the **timeframe split: 1D PF 1.65–2.27 (win 45–56%, +0.35 to +0.56R) against 4H PF 0.96–1.21 (win 33–38%, −0.03 to +0.13R)**, and SOL 4H is outright negative (−5.11R over 189 signals). 4H is break-even at best before costs, which fees/funding would erase — the 4H watch was dropped on this. Caveats live in the report (neutral proxy exit, not a strategy; no costs; one regime; compare rows only when their windows match). **Use `--days`, never `--limit`, to compare timeframes** — see the code-review note in the session log.
 5. ~~Optional Phase 3 dashboard~~ — **built in J6** (aiohttp, not FastAPI: one server shared with the Pine webhook). Since 2026-09-23 it can also *write* — `web.write_token` enables a command bar taking the CLI's one-line syntax. See the J6 entry and `README.md`.
 6. ~~Push `main`~~ — long done; the repo moved to https://github.com/embrizo/Trading_Journal on 2026-09-22 and is pushed after every session.
 7. **Tighten the backtest if you lean on it further** — the exit rule is a neutral proxy, and costs are still not modelled. `--rr` / `--horizon` sweeps would show how sensitive the 1D edge is; fees + funding would show whether 4H is merely break-even or actually negative net. Neither is built.
 
 ## Session log
+
+### Session 11 — 2026-10-06 (Claude Code on the web)
+**In one line:** the GCP watchlist feature went live on the VM, then a run of small dashboard
+polish + a Gemini fallback-model default, each shipped as its own squash-merged PR.
+
+- **Watchlist feature verified live on the VM.** The session-10 code is running on the e2-micro
+  with `web.write_token` set (a 32-hex string typed into `config.yaml` on the VM, reads stay
+  public). The dashboard shows all 9 symbols TradingView-style; add/remove and one-shot price
+  alerts to Telegram are wired. **Docker lesson re-learned the hard way:** the image `COPY src/`
+  **bakes the code in**, so a `git pull` alone shows the *old* UI — every code change needs
+  `docker compose up -d --build` (watch for a non-`CACHED [7/7] COPY src/` line and
+  `Container ... Recreated`), then a hard refresh. A `git pull` run *before* the PR was merged
+  also fetched stale `main` once — pull *after* the merge.
+- **Dashboard polish, merged in order:**
+  - **PR #2** (`config.watchlist_poll_seconds` 15→**5s**; price-axis **precision per symbol**
+    via `precisionFor()` — BTC 2dp, SOL/XRP 4dp, PUMP 6dp, applied through
+    `candles.applyOptions({priceFormat:{precision,minMove}})`; **favicon + tab logo** as an inline
+    base64-SVG breakout arrow beside the `<h1>`).
+  - **PR #3** (`0b510a0`) — **chart auto-refreshes every 30s**: `loadChart(fit=true)` gained a
+    `fit` arg so the periodic `loadChart(false)` reload preserves zoom/pan and skips the status
+    blink; `setInterval(..., 30000)`.
+  - **PR #4** (`5ae7671`) — **Gemini fallback model default**: `config.example.yaml`
+    `ai.fallback_model: gemini-3.5-flash-lite` (was empty). No code change — the coach already
+    retries once with `cfg.fallback_model` on a Gemini 429 (`coach._call_with_fallback`,
+    Gemini-only, 429-only, one retry). Set live on the VM too (`config.yaml` is mounted `:ro`,
+    so a `docker compose restart` picks it up — no `--build` for a config-only change).
+- **Branch workflow (confirmed working):** after each squash-merge, restart the dev branch from
+  `origin/main` (`git checkout -B <branch> origin/main`) before the next commit, then
+  force-with-lease (the branch then holds only already-merged history, so the force is safe).
+  This is what kept PRs #2–#4 `mergeable_state: clean` instead of the `dirty` that bit PR #3's
+  first attempt in session 10.
+- **Still owed (unchanged from session 10):** the Telegram bot_token that leaked in screenshots
+  should be `/revoke`d at @BotFather and swapped on the VM — **not yet confirmed done.** A live
+  price-alert fire to Telegram hasn't been exercised end-to-end yet.
 
 ### Session 10 — 2026-10-04 (Claude Code on the web)
 **In one line:** deployed to a free-tier GCP e2-micro end-to-end (9 OKX watchers + Gemini
@@ -216,7 +251,7 @@ feature for the dashboard.
     refreshing every 15s. Writes reuse the existing `write_token` localStorage flow.
   - `__main__.py` — starts `PriceFeed` when `web.enabled`, seeds the watchlist from `cfg.watches`
     on first run, passes the feed to the web server.
-  - `config.py` — `WebCfg.watchlist_poll_seconds` (default 15).
+  - `config.py` — `WebCfg.watchlist_poll_seconds` (default 15 then; lowered to 5 in session 11).
   - Tests: `tests/test_watchlist.py` (7) — DB CRUD + one-shot fire/no-refire/direction. Suite
     **292 passed** (`-m "not live"`; the one live Binance test needs network; `test_coach.py`
     needs the `ai` extra).
