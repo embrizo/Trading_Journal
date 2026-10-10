@@ -1,8 +1,8 @@
 # Claude handoff — Break Signal
 
-**Last Updated:** 2026-10-06 (session 11)
+**Last Updated:** 2026-10-10 (session 12)
 **Workspace:** two clones exist — `D:\etc\Program\7Days\Trading_Journal` (session 7) and
-`G:\7Days\Trading_Journal` (sessions 1–6 and 8). Neither is canonical; the remote is.
+`G:\7Days\Trading_Journal` (sessions 1–6, 8, 12). Neither is canonical; the remote is.
 Pull before working, and check `git status` in the *other* clone before assuming it is idle.
 **Repo:** https://github.com/embrizo/Trading_Journal (`main`) — the old `Break_Signal` remote is archived
 **Primary Language/Runtime:** Python 3.11+ (asyncio); Pine Script v6 (Phase 1)
@@ -187,10 +187,38 @@ URL will fail on push rather than diverge — repoint it with
 4. ~~M6 backtest report~~ — **done 2026-09-24.** `backtest/report.py` + [`BACKTEST_REPORT.md`](BACKTEST_REPORT.md): **`--days 730`** × SOL/BTC/ETH × 1D/4H on Binance, 743 judged signals over one shared 2-year window. **The defaults are not SOL-specific** — the three markets behave alike, which was the question. The finding that matters is the **timeframe split: 1D PF 1.65–2.27 (win 45–56%, +0.35 to +0.56R) against 4H PF 0.96–1.21 (win 33–38%, −0.03 to +0.13R)**, and SOL 4H is outright negative (−5.11R over 189 signals). 4H is break-even at best before costs, which fees/funding would erase — the 4H watch was dropped on this. Caveats live in the report (neutral proxy exit, not a strategy; no costs; one regime; compare rows only when their windows match). **Use `--days`, never `--limit`, to compare timeframes** — see the code-review note in the session log.
 5. ~~Optional Phase 3 dashboard~~ — **built in J6** (aiohttp, not FastAPI: one server shared with the Pine webhook). Since 2026-09-23 it can also *write* — `web.write_token` enables a command bar taking the CLI's one-line syntax. See the J6 entry and `README.md`.
 6. ~~Push `main`~~ — long done; the repo moved to https://github.com/embrizo/Trading_Journal on 2026-09-22 and is pushed after every session.
-8. **Break-and-retest signal — planned, not built** ([`RETEST_SIGNAL_PLAN.md`](RETEST_SIGNAL_PLAN.md), 2026-10-10). A second, higher-conviction event (`retest_up`/`retest_down`): after a break, price pulls back to the flipped line, tags it, and closes back on the breakout side. The one architectural cost is a new middle state in the line lifecycle — a break is terminal today (`mark_broken` drops the line the same bar), so a `PENDING_RETEST` record keeps the broken line's frozen geometry `(ts_ref, value_ref, slope)` for `retest_window` bars. Downstream is cheap: new `event` string, no journal migration, `signal_history`/`footer`/coach already filter by event. Off by default; R2 backtest (break vs retest across SOL/BTC/ETH) decides whether it goes live, same as the 4H call. Decisions resolved: minimal hold (wick tags + close holds, `retest_reject_body` toggle ships off), no volume filter on the retest leg. Phases R0–R4 in the plan.
+8. **Break-and-retest signal — R0 built (off by default), R1 in progress** ([`RETEST_SIGNAL_PLAN.md`](RETEST_SIGNAL_PLAN.md), plan 2026-10-10). A second, higher-conviction event (`retest_up`/`retest_down`): after a break, price pulls back to the flipped line, tags it, and closes back on the breakout side. The one architectural cost is a new middle state in the line lifecycle — a break is terminal today (`mark_broken` drops the line the same bar), so a `PENDING_RETEST` record keeps the broken line's frozen geometry `(ts_ref, value_ref, slope)` for `retest_window` bars. Downstream is cheap: new `event` string, no journal migration, `signal_history`/`footer`/coach already filter by event. Off by default; R2 backtest (break vs retest across SOL/BTC/ETH) decides whether it goes live, same as the 4H call. Decisions resolved: minimal hold (wick tags + close holds, `retest_reject_body` toggle ships off), no volume filter on the retest leg.
+   - **R0 done (2026-10-10, session 12, commit `275ca96`):** `core/retest.py` (`PendingRetest`, `RetestResult`, `check_retests`), six `Params` fields, `State.pending_retests` table + add/read/retire, `Engine.evaluate(pending=...)` branch returning `EngineResult.retire`, `event`/`_ARROW` strings, commented `config.example.yaml`. 11 synthetic tests in `test_retest.py`. **Correction vs §2 plan:** the window is `b < i ≤ b+window` — `age > window` expires *before* any tag check, so a late bar can't fire a retest (plan's naïve `age >= window` was off-by-one both ways).
+   - **R1 — watcher + journal flow (in progress):** wire `_on_close` to load pendings, pass to `evaluate`, dispatch retest signals through the existing `_journal_signal` → `_dispatch` path, apply the retire list, and record a pending whenever a break fires. `backtest/replay.py` reconstructs pendings the same way. Then R2 (backtest break vs retest), R3 (Pine parity), R4 (optional live).
 7. **Tighten the backtest if you lean on it further** — the exit rule is a neutral proxy, and costs are still not modelled. `--rr` / `--horizon` sweeps would show how sensitive the 1D edge is; fees + funding would show whether 4H is merely break-even or actually negative net. Neither is built.
 
 ## Session log
+
+### Session 12 — 2026-10-10 (G: clone, Claude Code desktop)
+**In one line:** started building the break-and-retest signal from
+[`RETEST_SIGNAL_PLAN.md`](RETEST_SIGNAL_PLAN.md) — R0 (pure core, off by default) landed and
+tested; R1 (watcher/replay wiring) under way.
+
+- **R0 — core retest engine (commit `275ca96`).** New `core/retest.py` mirrors
+  `core/breakout.py`: `PendingRetest` freezes the broken line's geometry
+  `(ts_ref, value_ref, slope)` at break time and recomputes the line value per bar from
+  timestamps, so it never calls `build_lines` and survives the anchor pivots aging out.
+  `check_retests` resolves one confirmed bar per pending to `retested` / `invalidated` /
+  `expired`. Six `Params` fields (`use_retest=false`, `retest_window=12`, `retest_touch=0.25`,
+  `retest_hold_buf=0.0`, `retest_invalidate=0.30`, `retest_reject_body=false`), a
+  `State.pending_retests` table (add/read/retire, survives restarts like `broken_lines`), the
+  `Engine.evaluate(pending=...)` branch (runs only when `use_retest`; returns `EngineResult.retire`),
+  the two `event` strings + `_ARROW` lines, and the params shipped commented in
+  `config.example.yaml`. **Zero behaviour change when off** — the engine does nothing new unless
+  `use_retest` and pendings are both present.
+- **Off-by-one caught while building:** the plan's §2 window is `b < i ≤ b+window`, but a naïve
+  `age >= window` expiry both expired a bar early and could let a tag fire *after* the window.
+  Restructured so `age > window` expires outright before any tag check; `age ≤ window` stays
+  eligible. Locked by `test_window_boundary_last_bar_still_eligible`.
+- **Tests:** 11 in `test_retest.py` — clean retest fires one signal; pullback-through →
+  invalidation; run-away → expiry; symmetric support case; frozen geometry correct with no pivots
+  in the series; window boundary (12 eligible / 13 expires); carry-over; `reject_body` toggle;
+  engine on/off gate; State round-trip. Full suite **335 passed, 3 skipped**.
 
 ### Session 11 — 2026-10-06 (Claude Code on the web)
 **In one line:** the GCP watchlist feature went live on the VM, then a run of small dashboard
