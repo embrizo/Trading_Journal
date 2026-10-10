@@ -42,6 +42,16 @@ params:
   use_body: true              # require a decisive candle body
   body_min: 0.5               # min body / range
   two_bar: false              # require 2 consecutive closes beyond the line
+  # Break-and-retest: a second, higher-conviction signal (retest_up/retest_down)
+  # fired when price pulls back to a freshly-broken line and holds. Off by
+  # default; see RETEST_SIGNAL_PLAN.md. Leave use_retest false until a backtest
+  # (phase R2) shows it earns a live slot.
+  # use_retest: false
+  # retest_window: 12         # bars after a break to watch for the retest
+  # retest_touch: 0.25        # xATR tolerance for the wick tagging the line
+  # retest_hold_buf: 0.0      # xATR the close must stay beyond the line to "hold"
+  # retest_invalidate: 0.30   # xATR close back through the line that voids the break
+  # retest_reject_body: false # require a rejection body (close on the favourable half)
 
 backfill: 500                 # candles fetched on startup
 

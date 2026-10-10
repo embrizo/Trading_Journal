@@ -26,6 +26,14 @@ class Params:
     use_body: bool = True
     body_min: float = 0.5
     two_bar: bool = False
+    # Break-and-retest (off by default; see RETEST_SIGNAL_PLAN.md). When
+    # use_retest is false none of these have any effect.
+    use_retest: bool = False
+    retest_window: int = 12       # bars after a break to watch for the retest
+    retest_touch: float = 0.25    # xATR tolerance for the wick tagging the line
+    retest_hold_buf: float = 0.0  # xATR the close must stay beyond the line to "hold"
+    retest_invalidate: float = 0.30  # xATR close back through the line that voids it
+    retest_reject_body: bool = False  # require a rejection body (close on the favourable half)
 
     def resolved_pivot_len(self, tf_seconds: int) -> int:
         """Auto-tune pivot lookback by timeframe, exactly as the Pine script."""

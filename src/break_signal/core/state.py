@@ -10,6 +10,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from .retest import PendingRetest
+
 
 class State:
     def __init__(self, db_path: str):
@@ -46,6 +48,18 @@ class State:
                 last_candle_ts INTEGER,
                 PRIMARY KEY (symbol, tf)
             );
+            CREATE TABLE IF NOT EXISTS pending_retests (
+                symbol    TEXT NOT NULL,
+                tf        TEXT NOT NULL,
+                line_id   TEXT NOT NULL,
+                side      TEXT NOT NULL,
+                ts_ref    INTEGER NOT NULL,
+                value_ref REAL NOT NULL,
+                slope     REAL NOT NULL,
+                touches   INTEGER NOT NULL,
+                broke_ts  INTEGER NOT NULL,
+                PRIMARY KEY (symbol, tf, line_id)
+            );
             """
         )
         self.conn.commit()
@@ -70,6 +84,39 @@ class State:
             (symbol, tf, line_id),
         )
         return cur.fetchone() is not None
+
+    # ── pending retests ─────────────────────────────────────────────────
+    def add_pending(self, symbol: str, tf: str, p: PendingRetest) -> None:
+        """Record a broken line to watch for a retest. No-op if already present."""
+        self.conn.execute(
+            "INSERT OR IGNORE INTO pending_retests"
+            "(symbol, tf, line_id, side, ts_ref, value_ref, slope, touches, broke_ts) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (symbol, tf, p.line_id, p.side, p.ts_ref, p.value_ref, p.slope,
+             p.touches, p.broke_ts),
+        )
+        self.conn.commit()
+
+    def pending_retests(self, symbol: str, tf: str) -> list[PendingRetest]:
+        cur = self.conn.execute(
+            "SELECT line_id, side, ts_ref, value_ref, slope, touches, broke_ts "
+            "FROM pending_retests WHERE symbol=? AND tf=?",
+            (symbol, tf),
+        )
+        return [
+            PendingRetest(
+                line_id=r[0], side=r[1], ts_ref=r[2], value_ref=r[3],
+                slope=r[4], touches=r[5], broke_ts=r[6],
+            )
+            for r in cur.fetchall()
+        ]
+
+    def retire_pending(self, symbol: str, tf: str, line_id: str) -> None:
+        self.conn.execute(
+            "DELETE FROM pending_retests WHERE symbol=? AND tf=? AND line_id=?",
+            (symbol, tf, line_id),
+        )
+        self.conn.commit()
 
     # ── alerts log ──────────────────────────────────────────────────────
     def log_alert(self, symbol: str, tf: str, line_id: str, event: str, price: float, candle_ts: int) -> None:

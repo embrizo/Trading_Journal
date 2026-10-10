@@ -6,7 +6,7 @@ backtester call, guaranteeing identical logic.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -14,6 +14,7 @@ from . import indicators
 from .breakout import check_breaks
 from .params import Params
 from .pivots import merge_pivots, pivot_highs, pivot_lows
+from .retest import PendingRetest, check_retests
 from .trendline import build_lines
 from .types import Candles, Signal, Trendline
 
@@ -23,6 +24,9 @@ class EngineResult:
     lines: list[Trendline]
     signals: list[Signal]
     atr_last: float
+    # (line_id, reason) for pending retests the watcher/replay should retire.
+    # Always empty unless params.use_retest and pendings were passed in.
+    retire: list[tuple[str, str]] = field(default_factory=list)
 
 
 class Engine:
@@ -52,8 +56,18 @@ class Engine:
         fine = self._confirmed(finder(values, self.pivot_fine), last_bar, self.pivot_fine)
         return merge_pivots(coarse, fine, self.params.max_pivots)
 
-    def evaluate(self, candles: Candles, broken_ids: set[str] | None = None) -> EngineResult:
-        """Compute lines + signals at the last bar of ``candles``."""
+    def evaluate(
+        self,
+        candles: Candles,
+        broken_ids: set[str] | None = None,
+        pending: list[PendingRetest] | None = None,
+    ) -> EngineResult:
+        """Compute lines + signals at the last bar of ``candles``.
+
+        When ``params.use_retest`` is set, any ``pending`` retests are resolved
+        against the last bar too; the resulting retest signals are appended and
+        the ids to retire are returned on ``EngineResult.retire``.
+        """
         broken_ids = broken_ids or set()
         n = len(candles)
         last_bar = n - 1
@@ -80,4 +94,22 @@ class Engine:
             self.exchange,
             self.tf_label,
         )
-        return EngineResult(lines=lines, signals=signals, atr_last=atr_last)
+
+        retire: list[tuple[str, str]] = []
+        if self.params.use_retest and pending:
+            rt = check_retests(
+                candles,
+                pending,
+                atr_last,
+                float(rsi[last_bar]) if np.isfinite(rsi[last_bar]) else float("nan"),
+                self.params,
+                last_bar,
+                self.tf_seconds,
+                self.symbol,
+                self.exchange,
+                self.tf_label,
+            )
+            signals = signals + rt.signals
+            retire = rt.retire
+
+        return EngineResult(lines=lines, signals=signals, atr_last=atr_last, retire=retire)

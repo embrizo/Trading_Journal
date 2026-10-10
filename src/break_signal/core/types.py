@@ -69,7 +69,7 @@ class Signal:
     symbol: str
     exchange: str
     tf: str
-    event: str         # "break_up" | "break_down"
+    event: str         # "break_up" | "break_down" | "retest_up" | "retest_down"
     side: str          # "resistance" | "support"
     price: float
     line: float

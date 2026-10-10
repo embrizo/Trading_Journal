@@ -13,7 +13,12 @@ class Notifier(Protocol):
         ...
 
 
-_ARROW = {"break_up": "🔴 ↑ RESISTANCE BREAK", "break_down": "🟢 ↓ SUPPORT BREAK"}
+_ARROW = {
+    "break_up": "🔴 ↑ RESISTANCE BREAK",
+    "break_down": "🟢 ↓ SUPPORT BREAK",
+    "retest_up": "🔴 ↑ RESISTANCE BREAK → RETEST HOLD",
+    "retest_down": "🟢 ↓ SUPPORT BREAK → RETEST HOLD",
+}
 
 
 def format_message(sig: Signal, footer: str | None = None) -> str:
