@@ -20,29 +20,49 @@ import aiohttp
 from ..config import bar_seconds
 from ..core.engine import Engine
 from ..core.params import Params
+from ..core.retest import PendingRetest
 from ..core.types import Candles, Signal
 from ..data import rest as data_rest
 
 
 def replay_signals(candles: Candles, params: Params, tf: str, symbol: str,
                    warmup: int = 60) -> list[Signal]:
-    """Walk a growing window and return every first-time break as a ``Signal``."""
+    """Walk a growing window and return every signal in the order it fired.
+
+    When ``params.use_retest`` is set the walk also reconstructs pending retests
+    exactly as the live watcher does — a pending armed on each break, fed back to
+    ``evaluate``, retired on the engine's ``retire`` list — so the retest's
+    second signal appears right after its break. Off by default: identical to the
+    old break-only replay.
+    """
     engine = Engine(params, bar_seconds(tf), symbol, "OKX", tf)
     broken: set[str] = set()
+    pending: dict[str, PendingRetest] = {}
     out: list[Signal] = []
     n = len(candles)
     for end in range(warmup, n + 1):
-        window = candles.slice(0)  # copy view
         window = Candles(
-            ts=window.ts[:end], open=window.open[:end], high=window.high[:end],
-            low=window.low[:end], close=window.close[:end], volume=window.volume[:end],
+            ts=candles.ts[:end], open=candles.open[:end], high=candles.high[:end],
+            low=candles.low[:end], close=candles.close[:end], volume=candles.volume[:end],
         )
-        res = engine.evaluate(window, broken)
+        res = engine.evaluate(window, broken, list(pending.values()))
+        last_ts = int(window.ts[end - 1])
         for sig in res.signals:
-            if sig.line_id in broken:
+            is_retest = sig.event.startswith("retest")
+            if not is_retest and sig.line_id in broken:
+                continue
+            out.append(sig)
+            if is_retest:
                 continue
             broken.add(sig.line_id)
-            out.append(sig)
+            if params.use_retest and sig._line is not None:
+                pending[sig.line_id] = PendingRetest(
+                    line_id=sig.line_id, side=sig._line.side, ts_ref=last_ts,
+                    value_ref=sig.line, slope=sig._line.slope,
+                    touches=sig.touches, broke_ts=last_ts,
+                )
+        for line_id, _reason in res.retire:
+            pending.pop(line_id, None)
     return out
 
 

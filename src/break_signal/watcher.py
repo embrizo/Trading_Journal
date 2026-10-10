@@ -10,6 +10,7 @@ import numpy as np
 
 from .config import Config, Watch, bar_seconds
 from .core.engine import Engine
+from .core.retest import PendingRetest
 from .core.state import State
 from .core.types import Candles, Signal
 from .data import provider
@@ -125,17 +126,50 @@ class Watcher:
         if self.state.last_candle_ts(self.symbol, self.tf) == last_ts:
             return  # already processed this candle
         broken = self.state.broken_ids(self.symbol, self.tf)
-        res = self.engine.evaluate(self.candles, broken)
+        use_retest = self.engine.params.use_retest
+        pending = self.state.pending_retests(self.symbol, self.tf) if use_retest else []
+        res = self.engine.evaluate(self.candles, broken, pending)
         for sig in res.signals:
-            if self.state.is_broken(self.symbol, self.tf, sig.line_id):
+            is_retest = sig.event.startswith("retest")
+            # A break fires once per line (is_broken dedupe). A retest fires on a
+            # line that is *already* broken — so it must bypass that guard, and
+            # must not re-mark/re-arm the line.
+            if not is_retest and self.state.is_broken(self.symbol, self.tf, sig.line_id):
                 continue
             signal_id = self._journal_signal(sig, last_ts)
             await self._dispatch(sig, res.lines, signal_id)
-            self.state.mark_broken(self.symbol, self.tf, sig.line_id)
             self.state.log_alert(
-                self.symbol, self.tf, sig.line_id, sig.event, sig.price, int(self.candles.ts[-1])
+                self.symbol, self.tf, sig.line_id, sig.event, sig.price, last_ts
             )
+            if not is_retest:
+                self.state.mark_broken(self.symbol, self.tf, sig.line_id)
+                if use_retest:
+                    self._arm_retest(sig, last_ts)
+        # Retire any pending retests the engine resolved this bar
+        # (retested / invalidated / expired).
+        for line_id, _reason in res.retire:
+            self.state.retire_pending(self.symbol, self.tf, line_id)
         self.state.set_last_candle_ts(self.symbol, self.tf, last_ts)
+
+    def _arm_retest(self, sig: Signal, broke_ts: int) -> None:
+        """Record a pending retest watch on a freshly broken line, freezing its
+        geometry at the break bar so later bars recompute the line from
+        timestamps alone (robust to the anchor pivots aging out)."""
+        if sig._line is None:
+            return
+        self.state.add_pending(
+            self.symbol,
+            self.tf,
+            PendingRetest(
+                line_id=sig.line_id,
+                side=sig._line.side,
+                ts_ref=broke_ts,
+                value_ref=sig.line,      # line value at the break bar
+                slope=sig._line.slope,   # price per bar
+                touches=sig.touches,
+                broke_ts=broke_ts,
+            ),
+        )
 
     def _journal_signal(self, sig: Signal, candle_ts: int) -> int | None:
         """Persist the alert to the journal (idempotent). Never blocks the alert."""
@@ -158,7 +192,7 @@ class Watcher:
             return None
 
     async def _dispatch(self, sig: Signal, lines, signal_id: int | None = None) -> None:
-        log.info("BREAK %s %s %s @ %.4g", self.symbol, self.tf, sig.event, sig.price)
+        log.info("SIGNAL %s %s %s @ %.4g", self.symbol, self.tf, sig.event, sig.price)
         text = format_message(sig, self._footer(sig, signal_id))
         image = None
         if self.cfg.render_chart:
