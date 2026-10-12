@@ -56,11 +56,7 @@ def replay_signals(candles: Candles, params: Params, tf: str, symbol: str,
                 continue
             broken.add(sig.line_id)
             if params.use_retest and sig._line is not None:
-                pending[sig.line_id] = PendingRetest(
-                    line_id=sig.line_id, side=sig._line.side, ts_ref=last_ts,
-                    value_ref=sig.line, slope=sig._line.slope,
-                    touches=sig.touches, broke_ts=last_ts,
-                )
+                pending[sig.line_id] = PendingRetest.from_break(sig, last_ts)
         for line_id, _reason in res.retire:
             pending.pop(line_id, None)
     return out

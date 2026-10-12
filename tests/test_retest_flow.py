@@ -85,6 +85,43 @@ def test_watcher_arms_pending_on_break_then_fires_retest(tmp_path):
     state.close()
 
 
+def test_watcher_retires_pending_on_invalidation(tmp_path):
+    state = State(str(tmp_path / "s.db"))
+    w, nf = _make_watcher(state, Params(use_retest=True))
+    w.candles = _break_bar(descending_resistance())
+    asyncio.run(w._on_close())
+    p = state.pending_retests(SYM, TF)[0]
+
+    nf.texts.clear()
+    break_ts = int(w.candles.ts[-1])
+    lv = p.value_at(break_ts + MS_PER_DAY, TF_S)
+    # next bar closes decisively back under the line → invalidation, no signal
+    w.candles = append_bar(w.candles, open_=lv - 1, high=lv - 0.5, low=lv - 8,
+                           close=lv - 6, volume=120.0)
+    asyncio.run(w._on_close())
+    assert nf.texts == []                              # nothing dispatched
+    assert state.pending_retests(SYM, TF) == []        # pending retired (invalidated)
+    state.close()
+
+
+def test_watcher_retires_pending_on_expiry(tmp_path):
+    state = State(str(tmp_path / "s.db"))
+    w, nf = _make_watcher(state, Params(use_retest=True))
+    w.candles = _break_bar(descending_resistance())
+    asyncio.run(w._on_close())
+    assert len(state.pending_retests(SYM, TF)) == 1
+
+    nf.texts.clear()
+    # a bar 13 days on → age 13 > retest_window(12); sits below the line so it
+    # breaks nothing new. The pending expires with no signal.
+    w.candles = append_bar(w.candles, open_=85.0, high=85.5, low=84.0, close=85.0,
+                           volume=120.0, dt_ms=13 * MS_PER_DAY)
+    asyncio.run(w._on_close())
+    assert nf.texts == []
+    assert state.pending_retests(SYM, TF) == []        # pending retired (expired)
+    state.close()
+
+
 def test_watcher_off_by_default_arms_nothing(tmp_path):
     state = State(str(tmp_path / "s.db"))
     w, nf = _make_watcher(state, Params())        # use_retest defaults False

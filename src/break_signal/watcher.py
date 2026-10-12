@@ -157,19 +157,7 @@ class Watcher:
         timestamps alone (robust to the anchor pivots aging out)."""
         if sig._line is None:
             return
-        self.state.add_pending(
-            self.symbol,
-            self.tf,
-            PendingRetest(
-                line_id=sig.line_id,
-                side=sig._line.side,
-                ts_ref=broke_ts,
-                value_ref=sig.line,      # line value at the break bar
-                slope=sig._line.slope,   # price per bar
-                touches=sig.touches,
-                broke_ts=broke_ts,
-            ),
-        )
+        self.state.add_pending(self.symbol, self.tf, PendingRetest.from_break(sig, broke_ts))
 
     def _journal_signal(self, sig: Signal, candle_ts: int) -> int | None:
         """Persist the alert to the journal (idempotent). Never blocks the alert."""

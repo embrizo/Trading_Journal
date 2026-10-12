@@ -77,11 +77,18 @@ def _outcome_of(candles: Candles, start: int, direction: str, entry: float,
 
 
 def evaluate(candles: Candles, signals: list[Signal], rr: float = DEFAULT_RR,
-             horizon: int = DEFAULT_HORIZON) -> tuple[list[dict], int]:
+             horizon: int = DEFAULT_HORIZON, min_risk_atr: float = 0.0) -> tuple[list[dict], int]:
     """``(rows, unresolved)`` — one row per *judged* signal, with R from
     ``analytics.r_multiple``, plus a count of the signals at the end of the series
     that had too little forward data to judge. Those are excluded rather than
-    counted as flat outcomes."""
+    counted as flat outcomes.
+
+    ``min_risk_atr`` drops signals whose risk is below that many ATR (``atr_dist``
+    is risk-in-ATR). A break always clears ``atr_break`` by construction, but a
+    retest can close right on the line (``retest_hold_buf`` default 0), giving a
+    near-zero risk whose target and stop then fall inside one bar and score as an
+    ambiguous loss. Flooring both legs at the break buffer keeps the comparison
+    on comparable risk; left at 0 it changes nothing."""
     by_ts = {int(t): i for i, t in enumerate(candles.ts)}
     rows: list[dict] = []
     unresolved = 0
@@ -98,6 +105,8 @@ def evaluate(candles: Candles, signals: list[Signal], rr: float = DEFAULT_RR,
         risk = abs(entry - line)
         if risk <= 0:
             continue
+        if min_risk_atr > 0 and d.get("atr_dist") is not None and float(d["atr_dist"]) < min_risk_atr:
+            continue           # risk too small to be a comparable trade (see docstring)
         target = entry + rr * risk if direction == "LONG" else entry - rr * risk
         kind, exit_price, bars, ambiguous = _outcome_of(
             candles, i, direction, entry, line, target, horizon)
@@ -202,7 +211,7 @@ def _event_kind(event: str) -> str:
 
 
 def render(per_market: list[dict], rr: float, horizon: int,
-           params_label: str = "strict defaults") -> str:
+           params_label: str = "strict defaults", min_risk_atr: float = 0.0) -> str:
     """Markdown: one line per market, then the pooled result.
 
     Each row carries its own window, because a bar count covers a different span
@@ -215,7 +224,7 @@ def render(per_market: list[dict], rr: float, horizon: int,
     output is unchanged.
     """
     if any(_event_kind(r["event"]) == "retest" for m in per_market for r in m["rows"]):
-        return _render_grouped(per_market, rr, horizon, params_label)
+        return _render_grouped(per_market, rr, horizon, params_label, min_risk_atr)
     out = [f"# Backtest hit-rate — target {rr:g}R, stop at the line, {horizon}-bar horizon", "",
            f"Signals generated with **{params_label}**; a stop fills at the worse of the "
            f"stop and the bar's open, a target at the limit.", ""]
@@ -296,7 +305,7 @@ def render(per_market: list[dict], rr: float, horizon: int,
 
 
 def _render_grouped(per_market: list[dict], rr: float, horizon: int,
-                    params_label: str) -> str:
+                    params_label: str, min_risk_atr: float = 0.0) -> str:
     """Break vs retest, R2's empirical case. Each market splits into a break line
     and a retest line over the same window; the pooled rows and the verdict say
     whether the retest raised win rate / PF and at what cost in signal count.
@@ -312,6 +321,16 @@ def _render_grouped(per_market: list[dict], rr: float, horizon: int,
         f"of the stop and the bar's open, a target at the limit. The retest is a second entry "
         f"(entry = the retest close, stop = the line at the retest bar), judged by the same proxy.",
         "",
+    ]
+    if min_risk_atr > 0:
+        out += [
+            f"Both legs are floored at a minimum risk of **{min_risk_atr:g}×ATR** (the break "
+            f"buffer): a break always clears it, but it drops retests that close right on the "
+            f"line, whose near-zero risk would otherwise put target and stop inside one bar and "
+            f"score as an ambiguous loss — an artifact, not an edge.",
+            "",
+        ]
+    out += [
         "| market | kind | window | signals | W/L/BE | win | avg R | total R | PF | max DD | ambig |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
@@ -443,6 +462,9 @@ async def _main(args) -> int:
     params, params_label, cfg_exchange = load_params(args.config)
     if args.retest and not params.use_retest:
         params = replace(params, use_retest=True)   # grouped header names use_retest itself
+    # Floor both legs at the break buffer only in a retest run; a break always
+    # clears it, so a break-only report is left bit-for-bit unchanged.
+    min_risk_atr = params.atr_break if params.use_retest else 0.0
     rest = data_rest(args.exchange or cfg_exchange or "okx")
     per_market: list[dict] = []
     failed: list[str] = []
@@ -463,7 +485,7 @@ async def _main(args) -> int:
                     print(f"{symbol} {tf}: only {len(candles)} candles, skipped", file=sys.stderr)
                     continue
                 signals = replay_signals(candles, params, tf, symbol, args.warmup)
-                rows, unresolved = evaluate(candles, signals, args.rr, args.horizon)
+                rows, unresolved = evaluate(candles, signals, args.rr, args.horizon, min_risk_atr)
                 per_market.append({"symbol": symbol, "tf": tf, "rows": rows,
                                    "unresolved": unresolved,
                                    "window": candle_window(candles, args.warmup, args.horizon)})
@@ -478,7 +500,7 @@ async def _main(args) -> int:
         print(f"note: {len(failed)} market(s) missing from the report: {', '.join(failed)}",
               file=sys.stderr)
 
-    text = render(per_market, args.rr, args.horizon, params_label)
+    text = render(per_market, args.rr, args.horizon, params_label, min_risk_atr)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(text + "\n")

@@ -188,21 +188,30 @@ the pivots still being present.
 - **R1 — watcher + journal flow.** Wire `_on_close`, dispatch, pending lifecycle.
   Verify on Binance 4H (OKX is blocked here) that a historical SUI break→retest
   produces the two signals in the right order, with the second as `retest_up`.
-- **R2 — the empirical case. DONE (2026-10-12) — verdict: do not enable.**
-  `backtest/report.py` now splits break vs retest by `event`; `--retest` turns
-  on `use_retest`. Run across SOL/BTC/ETH × 1D/4H over a shared 2-year Binance
-  window ([`RETEST_BACKTEST.md`](RETEST_BACKTEST.md)). The minimal-hold retest
-  did **not** raise the edge: pooled break→retest win 38%→32%, PF 1.16→0.91,
-  expectancy +0.10R→−0.07R, total +75.57R→−25.90R on 53% as many signals. On 1D
-  it was a wash to worse (it gutted ETH 1D, PF 2.36→1.00); on 4H it was worse
-  than the break on every market. Even granting the retest its larger
-  ambiguous-as-loss count (tight stop near the line), the gap is too wide. So
-  `use_retest` stays off — same discipline that dropped the 4H watch. **This
-  closes the live question for the minimal rules.** A stricter variant
-  (`retest_reject_body`, a hold buffer, an older-break requirement) is the only
-  thing that could revisit it, and per §9 that must not become threshold-sweeping
-  until a number pleases. R3/R4 below are therefore **not** worth doing unless
-  such a variant first clears R2.
+- **R2 — the empirical case. DONE (2026-10-12) — verdict: a wash, keep off.**
+  `backtest/report.py` splits break vs retest by `event`; `--retest` turns on
+  `use_retest`. Run across SOL/BTC/ETH × 1D/4H over a shared 2-year Binance
+  window ([`RETEST_BACKTEST.md`](RETEST_BACKTEST.md)). **Both legs are floored at
+  a minimum risk of `atr_break` (0.30×ATR)** — a break always clears it, but a
+  retest can close right on the line (`retest_hold_buf` 0) and the resulting
+  near-zero-risk trade is an ambiguous-as-loss artifact, not a real setup. That
+  floor matters: an unfloored first pass scored the retest at PF 0.91 /
+  −0.07R, which a code review correctly flagged as a measurement bias (70 of 399
+  retests were ambiguous losses). Floored, the picture is honest and different:
+  **pooled break→retest is a wash — win 38%→37%, PF 1.16→1.17, expectancy
+  +0.10R→+0.10R, on 37% as many signals (278 vs 754), ambiguous 70→7.** The
+  retest matches the break per trade; it is **not** the higher-conviction entry
+  it was meant to be, just a rarer one (its pooled max-DD is lower, 17R vs 46R,
+  but mostly because it trades less). Per-market it is mixed and mostly small-n:
+  the one genuine standout is **ETH 4H retest (n=82, PF 1.31, +15.33R) beating
+  ETH 4H break (PF 1.10)**; BTC 1D retest looks great (71%, PF 4.25) but n=7;
+  the 1D retests otherwise trail their strong breaks on tiny samples.
+  **Decision: `use_retest` stays off** — it earns no live slot because it does
+  not beat the break, but it is **not** disqualified. The only thread worth
+  pulling is a *stricter* variant (`retest_reject_body`, a hold buffer, an
+  older-break requirement) aimed at 4H, run once as a deliberate test — and per
+  §9 that must not become threshold-sweeping. R3/R4 remain not worth doing until
+  such a variant clearly clears R2.
 - **R3 — Pine parity.** Add retest detection on the frozen ghost line and the new
   `alertMsg` events; visual check on TradingView against the Python output.
 - **R4 — optional live.** Enable on the markets/timeframes R2 showed an edge on.

@@ -43,6 +43,22 @@ class PendingRetest:
         bars = (ts_ms - self.ts_ref) / (tf_seconds * 1000)
         return self.value_ref + self.slope * bars
 
+    @classmethod
+    def from_break(cls, sig: Signal, broke_ts: int) -> "PendingRetest":
+        """Freeze a break Signal's line geometry at the break bar. The caller
+        guarantees ``sig._line`` is set (it always is for a break). Shared by the
+        live watcher and the backtest replay so both arm pendings identically."""
+        assert sig._line is not None, "from_break requires a break signal with a line"
+        return cls(
+            line_id=sig.line_id,
+            side=sig._line.side,
+            ts_ref=broke_ts,
+            value_ref=sig.line,       # line value at the break bar
+            slope=sig._line.slope,    # price per bar
+            touches=sig.touches,
+            broke_ts=broke_ts,
+        )
+
 
 @dataclass
 class RetestResult:
