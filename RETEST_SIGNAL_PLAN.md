@@ -212,6 +212,32 @@ the pivots still being present.
   older-break requirement) aimed at 4H, run once as a deliberate test — and per
   §9 that must not become threshold-sweeping. R3/R4 remain not worth doing until
   such a variant clearly clears R2.
+- **R2b — the one stricter variant: `retest_reject_body`. DONE (2026-10-12) —
+  promising but SOL-4H-driven; still off.** Ran the single principled quality
+  filter the plan already ships (require the retest candle to close in the
+  favourable half — a rejection candle), once, no sweep, same window/markets.
+  Reproduce:
+  ```
+  # config: params: { use_retest: true, retest_reject_body: true }
+  python -m break_signal.backtest.report -c <cfg> \
+      --symbols "SOL-USDT-SWAP,BTC-USDT-SWAP,ETH-USDT-SWAP" --tf "1D,4H" \
+      --days 730 --exchange binance
+  ```
+  For the first time the retest **beats** the break pooled: win 38%→40%,
+  PF 1.16→**1.30**, expectancy +0.10R→**+0.18R**, max-DD 46R→15R, on 259 of 754
+  signals. On 4H it is genuinely mixed: **SOL 4H flips 0.94 (−7.11R) → 1.65
+  (+26.00R, n=73)** and **ETH 4H 1.10 → 1.33 (+17.00R, n=85)**, but **BTC 4H goes
+  negative, 1.16 → 0.90 (−5.73R, n=85)**. Against the *minimal* retest the filter
+  moved SOL 4H 1.00→1.65 (huge), ETH 4H 1.31→1.33 (flat), BTC 4H 1.05→0.90
+  (worse) — so **the pooled win is almost entirely SOL 4H**, not a robust
+  cross-market edge. 1D retests stay too rare to judge (n=4–7).
+  **Decision: `use_retest` stays off.** reject_body is a real quality filter and
+  the strongest result in the arc, but enabling it live would overreach on a
+  one-market, single-regime, **cost-free** result that BTC 4H contradicts; 4H
+  trades often, so fees + funding (still unmodelled) matter most exactly here.
+  **Deliberately did not sweep** further knobs (hold buffer, window, older-break)
+  — that is the §9 over-fit trap. If ever revisited: model costs first, then look
+  only at SOL + ETH 4H, and treat it as a hypothesis to disprove.
 - **R3 — Pine parity.** Add retest detection on the frozen ghost line and the new
   `alertMsg` events; visual check on TradingView against the Python output.
 - **R4 — optional live.** Enable on the markets/timeframes R2 showed an edge on.
