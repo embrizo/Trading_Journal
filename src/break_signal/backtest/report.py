@@ -25,6 +25,7 @@ import argparse
 import asyncio
 import json
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import aiohttp
@@ -92,7 +93,7 @@ def evaluate(candles: Candles, signals: list[Signal], rr: float = DEFAULT_RR,
         if i >= len(candles) - 1:
             unresolved += 1                              # fired on the final bar
             continue
-        direction = "LONG" if d["event"] == "break_up" else "SHORT"
+        direction = "LONG" if d["event"] in ("break_up", "retest_up") else "SHORT"
         entry, line = float(d["price"]), float(d["line"])
         risk = abs(entry - line)
         if risk <= 0:
@@ -195,6 +196,11 @@ def windows_comparable(windows: list[tuple[int, int]], min_overlap: float = 0.9)
     return union > 0 and overlap / union >= min_overlap
 
 
+def _event_kind(event: str) -> str:
+    """"break" (break_up/break_down) or "retest" (retest_up/retest_down)."""
+    return "retest" if event.startswith("retest") else "break"
+
+
 def render(per_market: list[dict], rr: float, horizon: int,
            params_label: str = "strict defaults") -> str:
     """Markdown: one line per market, then the pooled result.
@@ -202,7 +208,14 @@ def render(per_market: list[dict], rr: float, horizon: int,
     Each row carries its own window, because a bar count covers a different span
     on every timeframe — 1100 bars is ~3 years of 1D but ~6 months of 4H. Rows
     whose windows differ are not comparable, and the pooled line says so.
+
+    When the signals include retests (a ``use_retest`` run), the report instead
+    splits every market into a break line and a retest line and asks whether the
+    retest earned its place — see :func:`_render_grouped`. With breaks only the
+    output is unchanged.
     """
+    if any(_event_kind(r["event"]) == "retest" for m in per_market for r in m["rows"]):
+        return _render_grouped(per_market, rr, horizon, params_label)
     out = [f"# Backtest hit-rate — target {rr:g}R, stop at the line, {horizon}-bar horizon", "",
            f"Signals generated with **{params_label}**; a stop fills at the worse of the "
            f"stop and the bar's open, a target at the limit.", ""]
@@ -282,6 +295,121 @@ def render(per_market: list[dict], rr: float, horizon: int,
     return "\n".join(out)
 
 
+def _render_grouped(per_market: list[dict], rr: float, horizon: int,
+                    params_label: str) -> str:
+    """Break vs retest, R2's empirical case. Each market splits into a break line
+    and a retest line over the same window; the pooled rows and the verdict say
+    whether the retest raised win rate / PF and at what cost in signal count.
+
+    The retest is a *separate, later* entry, not a filter on the break: its entry
+    is the retest close and its stop is the line value at the retest bar. So the
+    two populations are judged by the identical neutral proxy, just anchored at
+    different bars."""
+    out = [
+        f"# Backtest — break vs retest, target {rr:g}R, stop at the line, {horizon}-bar horizon",
+        "",
+        f"Signals generated with **{params_label} + `use_retest`**; a stop fills at the worse "
+        f"of the stop and the bar's open, a target at the limit. The retest is a second entry "
+        f"(entry = the retest close, stop = the line at the retest bar), judged by the same proxy.",
+        "",
+        "| market | kind | window | signals | W/L/BE | win | avg R | total R | PF | max DD | ambig |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+
+    def line(label: str, kind: str, rows_: list[dict], window: str) -> str:
+        s = summarize(rows_)
+        amb = sum(1 for r in rows_ if r["ambiguous"])
+        win = "–" if s["win_rate"] is None else f"{round(s['win_rate'] * 100)}%"
+        return (f"| {label} | {kind} | {window} | {s['n']} | "
+                f"{s['wins']}/{s['losses']}/{s['be']} | {win} | {_n(s['avg_r'])} | "
+                f"{_n(s['total_r'])} | {_n(s['profit_factor'])} | {_n(s['max_drawdown_r'])} | {amb} |")
+
+    pooled_break: list[dict] = []
+    pooled_retest: list[dict] = []
+    unresolved_total = 0
+    windows: list[tuple[int, int]] = []
+    for m in per_market:
+        w = m.get("window")
+        wlabel = _fmt_window(w) if w else _window(m["rows"])
+        brk = [r for r in m["rows"] if _event_kind(r["event"]) == "break"]
+        ret = [r for r in m["rows"] if _event_kind(r["event"]) == "retest"]
+        out.append(line(f"{m['symbol']} {m['tf']}", "break", brk, wlabel))
+        out.append(line(f"{m['symbol']} {m['tf']}", "retest", ret, wlabel))
+        pooled_break += brk
+        pooled_retest += ret
+        unresolved_total += m["unresolved"]
+        if w:
+            windows.append(w)
+
+    comparable = windows_comparable(windows)
+    if comparable and windows:
+        pooled_window = _fmt_window((max(w[0] for w in windows), min(w[1] for w in windows)))
+    elif comparable:
+        pooled_window = _window(pooled_break + pooled_retest)
+    else:
+        pooled_window = "mixed"
+    out.append(line("**all**", "break", pooled_break, pooled_window))
+    out.append(line("**all**", "retest", pooled_retest, pooled_window))
+    out.append("")
+    if not comparable:
+        out.append("> **The rows above cover different windows, so they are not directly "
+                   "comparable and the pooled rows mix periods.** Pass `--days` instead of "
+                   "`--limit` to give every timeframe the same window.")
+        out.append("")
+
+    # ── the verdict ──────────────────────────────────────────────────────
+    sb, sr = summarize(pooled_break), summarize(pooled_retest)
+    nb, nr = sb["n"], sr["n"]
+    conv = f"{round(100 * nr / nb)}%" if nb else "–"
+
+    def wr(s):
+        return "–" if s["win_rate"] is None else f"{round(s['win_rate'] * 100)}%"
+
+    out.append(
+        f"**Break vs retest (pooled).** Win {wr(sb)} (n={nb}) → {wr(sr)} (n={nr}); "
+        f"PF {_n(sb['profit_factor'])} → {_n(sr['profit_factor'])}; "
+        f"expectancy {_n(sb['expectancy_r'])}R → {_n(sr['expectancy_r'])}R; "
+        f"total {_n(sb['total_r'])}R → {_n(sr['total_r'])}R. "
+        f"The retest fired on {conv} of the breaks ({nr} of {nb})."
+    )
+    out.append(
+        "The retest earns a live slot only if it lifts win rate **and** expectancy enough to "
+        "justify trading far fewer signals; a higher win rate on a handful of trades is noise. "
+        "Read the per-market rows the same way — a retest edge that only shows up pooled, or "
+        "only on one market, is not one to enable."
+    )
+    ab_b = sum(1 for r in pooled_break if r["ambiguous"])
+    ab_r = sum(1 for r in pooled_retest if r["ambiguous"])
+    if ab_b or ab_r:
+        out.append(
+            f"\n{ab_r} retest and {ab_b} break signal(s) hit target and stop inside one candle "
+            f"and were scored as losses. The retest enters near the line, so its stop is tight "
+            f"and this happens to it far more often — its true result is understated relative to "
+            f"the break's, which the gap should be read against."
+        )
+    if unresolved_total:
+        out.append(f"\n{unresolved_total} signal(s) fired too close to the end of the data to "
+                   f"resolve within {horizon} bars and are excluded rather than counted flat.")
+
+    out += [
+        "",
+        "## How to read this",
+        "",
+        "- **The retest is a different trade, not a filter.** It enters later, at the retest",
+        "  close, with its stop at the line where the retest happened — so its R is measured",
+        "  against a smaller risk and the two populations are not the same bars.",
+        "- **Not a strategy result.** The exit rule is a neutral proxy, not a plan anyone trades.",
+        "  Re-run with `--rr` / `--horizon` before leaning on any of it.",
+        "- **No costs.** Fees, funding and slippage are not modelled; near PF 1.0 they decide it.",
+        "- **One window.** Compare rows only when their windows match (`--days`, not `--limit`).",
+        "- **Sample size.** Retests are rarer than breaks; treat any kind-row under ~30 signals",
+        "  as indicative only, and per-market retest counts will often be below that.",
+        "- Stop = the broken line, signals judged only on candles *after* they fired (no",
+        "  look-ahead), every statistic from `journal/analytics.py`.",
+    ]
+    return "\n".join(out)
+
+
 def _n(x, d: int = 2) -> str:
     if x is None:
         return "–"
@@ -313,6 +441,8 @@ async def _main(args) -> int:
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     tfs = [t.strip() for t in args.tf.split(",") if t.strip()]
     params, params_label, cfg_exchange = load_params(args.config)
+    if args.retest and not params.use_retest:
+        params = replace(params, use_retest=True)   # grouped header names use_retest itself
     rest = data_rest(args.exchange or cfg_exchange or "okx")
     per_market: list[dict] = []
     failed: list[str] = []
@@ -379,6 +509,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="candles per market — note this is a bar count, so it spans a "
                          "different period on each timeframe")
     ap.add_argument("--warmup", type=int, default=60)
+    ap.add_argument("--retest", action="store_true",
+                    help="turn on use_retest and split the report into break vs retest (R2)")
     ap.add_argument("--rr", type=float, default=DEFAULT_RR, help="target in R")
     ap.add_argument("--horizon", type=int, default=DEFAULT_HORIZON, help="bars to resolve a signal")
     ap.add_argument("--out", default=None, help="write markdown here instead of stdout")

@@ -269,6 +269,35 @@ def test_synthetic_trades_close_when_they_actually_closed():
         assert t.closed_ts > t.opened_ts                  # never closes at its own entry
 
 
+# ── retest (R2) ───────────────────────────────────────────────────────────────
+def test_retest_up_is_judged_long_and_retest_down_short():
+    """The event→direction map must know the two retest events, or retest_up would
+    fall through to SHORT and every long retest would be scored upside-down."""
+    up, _ = _eval([(110, 109, 110), (131, 118, 130)], [_sig(0, event="retest_up")], horizon=5)
+    assert up[0]["direction"] == "LONG" and up[0]["outcome"] == "WIN"
+    dn, _ = _eval([(91, 89, 90), (83, 69, 70)],
+                  [_sig(0, event="retest_down", price=90.0, line=100.0)], horizon=5)
+    assert dn[0]["direction"] == "SHORT" and dn[0]["outcome"] == "WIN"
+
+
+def test_render_splits_break_vs_retest_when_retests_present():
+    brk, _ = _eval([(110, 109, 110), (131, 118, 130)], [_sig(0, event="break_up")], horizon=5)
+    ret, _ = _eval([(110, 109, 110), (131, 118, 130)], [_sig(0, event="retest_up")], horizon=5)
+    text = R.render([_market("SOL-USDT-SWAP", "1D", brk + ret)], 2.0, 30)
+    assert "| kind |" in text                      # grouped layout
+    assert "| break |" in text and "| retest |" in text
+    assert "Break vs retest (pooled)" in text
+    assert "use_retest" in text
+    assert "The retest fired on" in text            # the signal-count cost is stated
+
+
+def test_render_stays_flat_without_any_retests():
+    brk, _ = _eval([(110, 109, 110), (131, 118, 130)], [_sig(0, event="break_up")], horizon=5)
+    text = R.render([_market("SOL-USDT-SWAP", "1D", brk)], 2.0, 30)
+    assert "| kind |" not in text                   # old layout untouched
+    assert "Break vs retest" not in text
+
+
 # ── engine params are disclosed ──────────────────────────────────────────────
 def test_params_default_to_strict_and_the_report_says_so():
     params, label, exchange = R.load_params(None)
