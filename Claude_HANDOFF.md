@@ -1,9 +1,15 @@
 # Claude handoff — Break Signal
 
-**Last Updated:** 2026-10-10 (session 12)
+**Last Updated:** 2026-10-12 (session 12)
 **Workspace:** two clones exist — `D:\etc\Program\7Days\Trading_Journal` (session 7) and
 `G:\7Days\Trading_Journal` (sessions 1–6, 8, 12). Neither is canonical; the remote is.
 Pull before working, and check `git status` in the *other* clone before assuming it is idle.
+**⚠ Sync status (2026-10-12):** `origin/main` is at **`79291d8`** (the full break-and-retest
+arc — R0/R1/R2/R2b + the code-review fixes — all pushed from the `G:` clone). The
+`D:\etc\Program\7Days\Trading_Journal` clone is on a *different machine* and was **not** updated
+this session; bring it up to date there with `git fetch origin` → `git status` →
+`git pull --ff-only origin main` before doing any work in it. If `--ff-only` refuses, that clone
+has local commits — rebase them onto `origin/main`, don't force.
 **Repo:** https://github.com/embrizo/Trading_Journal (`main`) — the old `Break_Signal` remote is archived
 **Primary Language/Runtime:** Python 3.11+ (asyncio); Pine Script v6 (Phase 1)
 
