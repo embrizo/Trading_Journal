@@ -188,10 +188,21 @@ the pivots still being present.
 - **R1 — watcher + journal flow.** Wire `_on_close`, dispatch, pending lifecycle.
   Verify on Binance 4H (OKX is blocked here) that a historical SUI break→retest
   produces the two signals in the right order, with the second as `retest_up`.
-- **R2 — the empirical case.** Extend `backtest/report.py` to group rows by
-  `event`, run break vs retest across SOL/BTC/ETH over a common window, and see
-  whether the retest raises win rate / PF and at what cost in signal count.
-  **This decides whether it goes live**, the same way R2 decided the 4H watch.
+- **R2 — the empirical case. DONE (2026-10-12) — verdict: do not enable.**
+  `backtest/report.py` now splits break vs retest by `event`; `--retest` turns
+  on `use_retest`. Run across SOL/BTC/ETH × 1D/4H over a shared 2-year Binance
+  window ([`RETEST_BACKTEST.md`](RETEST_BACKTEST.md)). The minimal-hold retest
+  did **not** raise the edge: pooled break→retest win 38%→32%, PF 1.16→0.91,
+  expectancy +0.10R→−0.07R, total +75.57R→−25.90R on 53% as many signals. On 1D
+  it was a wash to worse (it gutted ETH 1D, PF 2.36→1.00); on 4H it was worse
+  than the break on every market. Even granting the retest its larger
+  ambiguous-as-loss count (tight stop near the line), the gap is too wide. So
+  `use_retest` stays off — same discipline that dropped the 4H watch. **This
+  closes the live question for the minimal rules.** A stricter variant
+  (`retest_reject_body`, a hold buffer, an older-break requirement) is the only
+  thing that could revisit it, and per §9 that must not become threshold-sweeping
+  until a number pleases. R3/R4 below are therefore **not** worth doing unless
+  such a variant first clears R2.
 - **R3 — Pine parity.** Add retest detection on the frozen ghost line and the new
   `alertMsg` events; visual check on TradingView against the Python output.
 - **R4 — optional live.** Enable on the markets/timeframes R2 showed an edge on.
